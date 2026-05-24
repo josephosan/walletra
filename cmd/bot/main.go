@@ -42,15 +42,29 @@ func main() {
 	}
 	telegramBot.Debug = cfg.Env != "prod"
 	l.Printf("bot authorized as @%s", telegramBot.Self.UserName)
-	_, _ = telegramBot.Request(tgbotapi.NewSetMyCommands(
-		tgbotapi.BotCommand{Command: "start", Description: "Start bot"},
-		tgbotapi.BotCommand{Command: "help", Description: "Help center"},
-		tgbotapi.BotCommand{Command: "profile", Description: "Show your profile"},
-		tgbotapi.BotCommand{Command: "admin", Description: "Superuser help center"},
-		tgbotapi.BotCommand{Command: "admin_help", Description: "Superuser help center"},
-		tgbotapi.BotCommand{Command: "admin_users", Description: "List users (superuser)"},
-		tgbotapi.BotCommand{Command: "admin_activity", Description: "User activities (superuser)"},
+	userCommands := []tgbotapi.BotCommand{
+		{Command: "start", Description: "Start bot"},
+		{Command: "help", Description: "Help center"},
+		{Command: "profile", Description: "Show your profile"},
+	}
+	_, _ = telegramBot.Request(tgbotapi.NewSetMyCommandsWithScope(
+		tgbotapi.BotCommandScope{Type: "default"},
+		userCommands...,
 	))
+
+	if cfg.SuperUserTelegram > 0 {
+		superCommands := append([]tgbotapi.BotCommand{}, userCommands...)
+		superCommands = append(superCommands,
+			tgbotapi.BotCommand{Command: "admin", Description: "Superuser help center"},
+			tgbotapi.BotCommand{Command: "admin_help", Description: "Superuser help center"},
+			tgbotapi.BotCommand{Command: "admin_users", Description: "List users (superuser)"},
+			tgbotapi.BotCommand{Command: "admin_activity", Description: "User activities (superuser)"},
+		)
+		_, _ = telegramBot.Request(tgbotapi.NewSetMyCommandsWithScope(
+			tgbotapi.BotCommandScope{Type: "chat", ChatID: cfg.SuperUserTelegram},
+			superCommands...,
+		))
+	}
 
 	r := repo.New(dbPool)
 	if cfg.SuperUserTelegram > 0 {

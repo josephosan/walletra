@@ -319,8 +319,9 @@ func (h *Handler) handleCallback(ctx context.Context, bot *tgbotapi.BotAPI, cb *
 			break
 		}
 		h.log.Printf("frequency updated user_id=%s freq=%s", u.ID, freq)
-		h.sendText(bot, chatID, fmt.Sprintf("✅ Report frequency changed to %s", freq))
-		h.sendSettingsMenu(ctx, bot, chatID, u.ID)
+		h.updateSettingsMessage(ctx, bot, chatID, cb.Message.MessageID, u.ID)
+		_, _ = bot.Request(tgbotapi.NewCallback(cb.ID, fmt.Sprintf("✅ Frequency: %s", freq)))
+		return
 	case data == "toggle_unchanged":
 		h.log.Printf("toggle unchanged requested user_id=%s", u.ID)
 		settings, err := h.repo.GetSettings(ctx, u.ID)
@@ -336,12 +337,13 @@ func (h *Handler) handleCallback(ctx context.Context, bot *tgbotapi.BotAPI, cb *
 			break
 		}
 		h.log.Printf("toggle unchanged updated user_id=%s new_value=%t", u.ID, !settings.IncludeUnchangedWallets)
+		h.updateSettingsMessage(ctx, bot, chatID, cb.Message.MessageID, u.ID)
 		if !settings.IncludeUnchangedWallets {
-			h.sendText(bot, chatID, "✅ Include unchanged wallets: ON")
+			_, _ = bot.Request(tgbotapi.NewCallback(cb.ID, "✅ Include unchanged: ON"))
 		} else {
-			h.sendText(bot, chatID, "✅ Include unchanged wallets: OFF")
+			_, _ = bot.Request(tgbotapi.NewCallback(cb.ID, "✅ Include unchanged: OFF"))
 		}
-		h.sendSettingsMenu(ctx, bot, chatID, u.ID)
+		return
 	}
 
 	_, _ = bot.Request(tgbotapi.NewCallback(cb.ID, "ok"))
@@ -436,6 +438,30 @@ func (h *Handler) sendSettingsMenu(ctx context.Context, bot *tgbotapi.BotAPI, ch
 		h.sendText(bot, chatID, "❌ Could not load settings")
 		return
 	}
+	text, kb := h.buildSettingsView(settings)
+	msg := tgbotapi.NewMessage(chatID, text)
+	msg.ReplyMarkup = kb
+	_, _ = bot.Send(msg)
+}
+
+func (h *Handler) updateSettingsMessage(ctx context.Context, bot *tgbotapi.BotAPI, chatID int64, messageID int, userID string) {
+	settings, err := h.repo.GetSettings(ctx, userID)
+	if err != nil {
+		h.sendText(bot, chatID, "❌ Could not load settings")
+		return
+	}
+	text, kb := h.buildSettingsView(settings)
+	edit := tgbotapi.NewEditMessageText(chatID, messageID, text)
+	edit.ReplyMarkup = &kb
+	if _, err := bot.Send(edit); err != nil {
+		// Fallback to sending a fresh settings message if edit fails.
+		msg := tgbotapi.NewMessage(chatID, text)
+		msg.ReplyMarkup = kb
+		_, _ = bot.Send(msg)
+	}
+}
+
+func (h *Handler) buildSettingsView(settings models.UserSettings) (string, tgbotapi.InlineKeyboardMarkup) {
 	freqLabel := func(freq models.Frequency, label string) string {
 		if settings.ReportFrequency == freq {
 			return "🟢 " + label
@@ -460,9 +486,7 @@ func (h *Handler) sendSettingsMenu(ctx context.Context, bot *tgbotapi.BotAPI, ch
 			tgbotapi.NewInlineKeyboardButtonData(unchangedLabel, "toggle_unchanged"),
 		),
 	)
-	msg := tgbotapi.NewMessage(chatID, "⚙️ Settings\n\n🟢 Active | ⚪ Inactive")
-	msg.ReplyMarkup = kb
-	_, _ = bot.Send(msg)
+	return "⚙️ Settings\n\n🟢 Active | ⚪ Inactive", kb
 }
 
 func (h *Handler) sendText(bot *tgbotapi.BotAPI, chatID int64, text string) {
