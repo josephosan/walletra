@@ -43,6 +43,7 @@ type removeWalletState struct {
 
 var supportedChains = []string{
 	"btc-mainnet",
+	"solana-mainnet",
 	"eth-mainnet",
 	"bsc-mainnet",
 	"base-mainnet",
@@ -55,6 +56,7 @@ var supportedChains = []string{
 
 var supportedBaseCoins = []string{
 	"BTC",
+	"SOL",
 	"ETH",
 	"BNB",
 	"BASE",
