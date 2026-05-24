@@ -36,7 +36,8 @@ Telegram bot to track wallet transactions and generate hourly/daily/monthly/year
 
 ## Notes
 
-- SQL migration auto-runs from `migrations/001_init.sql` via postgres init mount.
+- In Docker runtime (including Railway), container startup runs all SQL files in `/app/migrations` before launching the bot.
+- In local `docker-compose`, Postgres also runs init SQL on first fresh volume via `docker-entrypoint-initdb.d`.
 - If `COVALENT_API_KEY` is empty, polling runs but does not ingest transactions.
 - Chain names should match Covalent format like `eth-mainnet`, `bsc-mainnet`, `base-mainnet`.
 

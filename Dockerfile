@@ -6,7 +6,10 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/bot ./cmd/bot
 
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates tzdata
+RUN apk add --no-cache ca-certificates tzdata postgresql-client
 COPY --from=builder /bin/bot /usr/local/bin/bot
+COPY migrations /app/migrations
+COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
 WORKDIR /app
-CMD ["bot"]
+CMD ["/usr/local/bin/entrypoint.sh"]
