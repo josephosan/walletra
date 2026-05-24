@@ -1,0 +1,26 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: wallet-tracker-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: wallet_tracker
+      POSTGRES_USER: wallet
+      POSTGRES_PASSWORD: wallet
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d
+
+  bot:
+    build: .
+    container_name: wallet-tracker-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      - postgres
+
+volumes:
+  pg_data:

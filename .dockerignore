@@ -1,0 +1,22 @@
+.git
+.gitignore
+.dockerignore
+.env
+.env.*
+!.env.example
+README.md
+
+# Build/cache
+bin/
+build/
+dist/
+tmp/
+.cache/
+
+# OS/IDE
+.DS_Store
+.idea/
+.vscode/
+
+# Local data
+pg_data/

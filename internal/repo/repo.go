@@ -1,0 +1,231 @@
+package repo
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"wallet_tracker_bot/internal/models"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+type Repository struct {
+	db *pgxpool.Pool
+}
+
+func New(db *pgxpool.Pool) *Repository { return &Repository{db: db} }
+
+func (r *Repository) UpsertUser(ctx context.Context, telegramID int64, username string, isSuper bool) (models.User, error) {
+	role := models.RoleUser
+	if isSuper {
+		role = models.RoleSuperUser
+	}
+	q := `
+INSERT INTO users(telegram_id, username, role)
+VALUES ($1,$2,$3)
+ON CONFLICT (telegram_id)
+DO UPDATE SET username=EXCLUDED.username, role=EXCLUDED.role, updated_at=NOW()
+RETURNING id, telegram_id, username, role`
+	var u models.User
+	if err := r.db.QueryRow(ctx, q, telegramID, username, role).Scan(&u.ID, &u.TelegramID, &u.Username, &u.Role); err != nil {
+		return u, err
+	}
+	_, _ = r.db.Exec(ctx, `INSERT INTO user_settings(user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING`, u.ID)
+	return u, nil
+}
+
+func (r *Repository) GetUserByTelegramID(ctx context.Context, telegramID int64) (models.User, error) {
+	var u models.User
+	err := r.db.QueryRow(ctx, `SELECT id, telegram_id, username, role FROM users WHERE telegram_id=$1`, telegramID).
+		Scan(&u.ID, &u.TelegramID, &u.Username, &u.Role)
+	return u, err
+}
+
+func (r *Repository) AddWallet(ctx context.Context, userID, name, address, chain, baseCoin string, tokens []string) error {
+	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	var walletID string
+	if err := tx.QueryRow(ctx, `
+INSERT INTO wallets(user_id,name,address,chain,base_coin)
+VALUES ($1,$2,$3,$4,$5)
+ON CONFLICT (user_id,address,chain) DO UPDATE SET name=EXCLUDED.name, base_coin=EXCLUDED.base_coin, updated_at=NOW()
+RETURNING id`, userID, name, address, chain, baseCoin).Scan(&walletID); err != nil {
+		return err
+	}
+	for _, t := range tokens {
+		if _, err := tx.Exec(ctx, `INSERT INTO wallet_token_filters(wallet_id, token_symbol) VALUES ($1,$2) ON CONFLICT (wallet_id, token_symbol) DO NOTHING`, walletID, t); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+func (r *Repository) ListWalletsByUser(ctx context.Context, userID string) ([]models.Wallet, error) {
+	rows, err := r.db.Query(ctx, `SELECT id,user_id,name,address,chain,COALESCE(base_coin,''),is_active,last_polled_at FROM wallets WHERE user_id=$1 ORDER BY created_at DESC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	wallets := make([]models.Wallet, 0)
+	for rows.Next() {
+		var w models.Wallet
+		if err := rows.Scan(&w.ID, &w.UserID, &w.Name, &w.Address, &w.Chain, &w.BaseCoin, &w.IsActive, &w.LastPolledAt); err != nil {
+			return nil, err
+		}
+		wallets = append(wallets, w)
+	}
+	return wallets, rows.Err()
+}
+
+func (r *Repository) ListWalletsForPolling(ctx context.Context) ([]models.Wallet, error) {
+	rows, err := r.db.Query(ctx, `SELECT id,user_id,name,address,chain,COALESCE(base_coin,''),is_active,last_polled_at FROM wallets WHERE is_active=true`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	wallets := make([]models.Wallet, 0)
+	for rows.Next() {
+		var w models.Wallet
+		if err := rows.Scan(&w.ID, &w.UserID, &w.Name, &w.Address, &w.Chain, &w.BaseCoin, &w.IsActive, &w.LastPolledAt); err != nil {
+			return nil, err
+		}
+		wallets = append(wallets, w)
+	}
+	return wallets, rows.Err()
+}
+
+func (r *Repository) GetWalletTokens(ctx context.Context, walletID string) ([]string, error) {
+	rows, err := r.db.Query(ctx, `SELECT token_symbol FROM wallet_token_filters WHERE wallet_id=$1`, walletID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+func (r *Repository) InsertWalletTransactions(ctx context.Context, txs []models.WalletTransaction) error {
+	for _, t := range txs {
+		_, err := r.db.Exec(ctx, `
+INSERT INTO wallet_transactions(wallet_id,tx_hash,chain,token_symbol,token_address,direction,amount,amount_usd,tx_timestamp,raw_payload)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+ON CONFLICT DO NOTHING`,
+			t.WalletID, t.TxHash, t.Chain, t.TokenSymbol, t.TokenAddress, t.Direction, t.Amount, t.AmountUSD, t.Timestamp, t.RawPayload)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *Repository) MarkWalletPolled(ctx context.Context, walletID string, at time.Time) error {
+	_, err := r.db.Exec(ctx, `UPDATE wallets SET last_polled_at=$2, updated_at=NOW() WHERE id=$1`, walletID, at)
+	return err
+}
+
+func (r *Repository) GetSettings(ctx context.Context, userID string) (models.UserSettings, error) {
+	var s models.UserSettings
+	err := r.db.QueryRow(ctx, `SELECT user_id,report_frequency,include_unchanged_wallets,timezone,next_report_at FROM user_settings WHERE user_id=$1`, userID).
+		Scan(&s.UserID, &s.ReportFrequency, &s.IncludeUnchangedWallets, &s.Timezone, &s.NextReportAt)
+	return s, err
+}
+
+func (r *Repository) UpdateSettings(ctx context.Context, userID string, frequency models.Frequency, includeUnchanged bool) error {
+	_, err := r.db.Exec(ctx, `
+UPDATE user_settings
+SET report_frequency=$2, include_unchanged_wallets=$3, updated_at=NOW(), next_report_at=NULL
+WHERE user_id=$1`, userID, frequency, includeUnchanged)
+	return err
+}
+
+func (r *Repository) UsersDueForReport(ctx context.Context, now time.Time) ([]models.User, error) {
+	rows, err := r.db.Query(ctx, `
+SELECT u.id, u.telegram_id, u.username, u.role
+FROM users u
+JOIN user_settings s ON s.user_id=u.id
+WHERE s.next_report_at IS NULL OR s.next_report_at <= $1`, now)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var users []models.User
+	for rows.Next() {
+		var u models.User
+		if err := rows.Scan(&u.ID, &u.TelegramID, &u.Username, &u.Role); err != nil {
+			return nil, err
+		}
+		users = append(users, u)
+	}
+	return users, rows.Err()
+}
+
+func (r *Repository) SetNextReportAt(ctx context.Context, userID string, next time.Time) error {
+	_, err := r.db.Exec(ctx, `UPDATE user_settings SET next_report_at=$2, updated_at=NOW() WHERE user_id=$1`, userID, next)
+	return err
+}
+
+func (r *Repository) AggregateReport(ctx context.Context, userID string, from, to time.Time, includeUnchanged bool) ([]models.ReportRow, error) {
+	q := `
+SELECT w.name, w.address, w.chain,
+       COALESCE(t.token_symbol, '-'),
+       COALESCE(t.direction, '-'),
+       COALESCE(SUM(t.amount)::float8, 0)
+FROM wallets w
+LEFT JOIN wallet_transactions t
+  ON t.wallet_id=w.id
+ AND t.tx_timestamp >= $2
+ AND t.tx_timestamp < $3
+WHERE w.user_id=$1
+GROUP BY w.name, w.address, w.chain, t.token_symbol, t.direction
+ORDER BY w.name, t.token_symbol`
+	rows, err := r.db.Query(ctx, q, userID, from, to)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]models.ReportRow, 0)
+	for rows.Next() {
+		var rrow models.ReportRow
+		if err := rows.Scan(&rrow.WalletName, &rrow.Address, &rrow.Chain, &rrow.Token, &rrow.Direction, &rrow.Amount); err != nil {
+			return nil, err
+		}
+		if !includeUnchanged && rrow.Amount == 0 {
+			continue
+		}
+		out = append(out, rrow)
+	}
+	return out, rows.Err()
+}
+
+func EncodePayload(v any) []byte {
+	b, _ := json.Marshal(v)
+	return b
+}
+
+func IsNotFound(err error) bool {
+	return err == pgx.ErrNoRows
+}
+
+func Wrap(msg string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", msg, err)
+}

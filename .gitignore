@@ -1,0 +1,44 @@
+# Environment
+.env
+.env.*
+!.env.example
+
+# Go
+/bin/
+/dist/
+/build/
+*.test
+*.out
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.a
+*.o
+
+# Coverage
+coverage.out
+coverage.txt
+*.coverprofile
+
+# Logs
+*.log
+logs/
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Docker / local volumes
+pg_data/
+
+# Temp
+tmp/
+.cache/
+
+# Optional private docs/secrets
+secrets/
