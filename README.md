@@ -1,4 +1,6 @@
-# Walletra (@walletra_bot)
+# Walletra
+
+Telegram bot: <a href="https://t.me/walletra_bot" target="_blank">@walletra_bot</a>
 
 Telegram bot to track wallet transactions and generate hourly/daily/monthly/yearly reports.
 
