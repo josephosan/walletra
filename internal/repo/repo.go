@@ -19,19 +19,20 @@ type Repository struct {
 
 func New(db *pgxpool.Pool) *Repository { return &Repository{db: db} }
 
-func (r *Repository) UpsertUser(ctx context.Context, telegramID int64, username string) (models.User, error) {
+func (r *Repository) UpsertUser(ctx context.Context, telegramID int64, username string) (models.User, bool, error) {
 	q := `
 INSERT INTO users(telegram_id, username, role)
 VALUES ($1,$2,$3)
 ON CONFLICT (telegram_id)
 DO UPDATE SET username=EXCLUDED.username, updated_at=NOW()
-RETURNING id, telegram_id, username, role`
+RETURNING id, telegram_id, username, role, (xmax = 0) AS inserted`
 	var u models.User
-	if err := r.db.QueryRow(ctx, q, telegramID, username, models.RoleUser).Scan(&u.ID, &u.TelegramID, &u.Username, &u.Role); err != nil {
-		return u, err
+	var inserted bool
+	if err := r.db.QueryRow(ctx, q, telegramID, username, models.RoleUser).Scan(&u.ID, &u.TelegramID, &u.Username, &u.Role, &inserted); err != nil {
+		return u, false, err
 	}
 	_, _ = r.db.Exec(ctx, `INSERT INTO user_settings(user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING`, u.ID)
-	return u, nil
+	return u, inserted, nil
 }
 
 func (r *Repository) EnsureSuperUserByTelegramID(ctx context.Context, telegramID int64) (bool, error) {
@@ -88,6 +89,14 @@ func (r *Repository) ListWalletsByUser(ctx context.Context, userID string) ([]mo
 		wallets = append(wallets, w)
 	}
 	return wallets, rows.Err()
+}
+
+func (r *Repository) DeleteWalletsByName(ctx context.Context, userID, walletName string) (int64, error) {
+	cmd, err := r.db.Exec(ctx, `DELETE FROM wallets WHERE user_id=$1 AND LOWER(name)=LOWER($2)`, userID, walletName)
+	if err != nil {
+		return 0, err
+	}
+	return cmd.RowsAffected(), nil
 }
 
 func (r *Repository) CountWalletsByUser(ctx context.Context, userID string) (int, error) {

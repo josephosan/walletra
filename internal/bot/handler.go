@@ -24,8 +24,9 @@ type Handler struct {
 	report *service.ReportService
 	super  int64
 
-	mu     sync.Mutex
-	states map[int64]*walletCreateState
+	mu      sync.Mutex
+	states  map[int64]*walletCreateState
+	removal map[int64]*removeWalletState
 }
 
 type walletCreateState struct {
@@ -34,6 +35,10 @@ type walletCreateState struct {
 	Address string
 	Chain   string
 	Coin    string
+}
+
+type removeWalletState struct {
+	Name string
 }
 
 var supportedChains = []string{
@@ -61,7 +66,14 @@ var supportedBaseCoins = []string{
 }
 
 func NewHandler(log *log.Logger, repo *repo.Repository, report *service.ReportService, superUserID int64) *Handler {
-	return &Handler{log: log, repo: repo, report: report, super: superUserID, states: map[int64]*walletCreateState{}}
+	return &Handler{
+		log:     log,
+		repo:    repo,
+		report:  report,
+		super:   superUserID,
+		states:  map[int64]*walletCreateState{},
+		removal: map[int64]*removeWalletState{},
+	}
 }
 
 func (h *Handler) MainMenu() tgbotapi.ReplyKeyboardMarkup {
@@ -89,7 +101,7 @@ func (h *Handler) handleMessage(ctx context.Context, bot *tgbotapi.BotAPI, msg *
 	if msg.From != nil {
 		username = msg.From.UserName
 	}
-	u, err := h.repo.UpsertUser(ctx, msg.Chat.ID, username)
+	u, isNewUser, err := h.repo.UpsertUser(ctx, msg.Chat.ID, username)
 	if err != nil {
 		h.log.Printf("upsert user failed chat_id=%d err=%v", msg.Chat.ID, err)
 		h.sendText(bot, msg.Chat.ID, "Could not initialize user.")
@@ -102,9 +114,15 @@ func (h *Handler) handleMessage(ctx context.Context, bot *tgbotapi.BotAPI, msg *
 		u, _ = h.repo.GetUserByTelegramID(ctx, msg.Chat.ID)
 	}
 	h.log.Printf("user loaded chat_id=%d user_id=%s role=%s", msg.Chat.ID, u.ID, u.Role)
+	if isNewUser {
+		h.notifySuperuserNewSignup(bot, u)
+	}
 	h.audit(ctx, u, "message", msg.Text)
 
 	if h.handleWalletWizard(ctx, bot, msg, u.ID) {
+		return
+	}
+	if h.handleWalletRemovalInput(bot, msg) {
 		return
 	}
 
@@ -205,6 +223,41 @@ func (h *Handler) handleWalletWizard(ctx context.Context, bot *tgbotapi.BotAPI, 
 	return true
 }
 
+func (h *Handler) handleWalletRemovalInput(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) bool {
+	h.mu.Lock()
+	_, waiting := h.removal[msg.Chat.ID]
+	h.mu.Unlock()
+	if !waiting {
+		return false
+	}
+	text := strings.TrimSpace(msg.Text)
+	if isCancelText(text) {
+		h.mu.Lock()
+		delete(h.removal, msg.Chat.ID)
+		h.mu.Unlock()
+		h.sendText(bot, msg.Chat.ID, "🛑 Wallet removal canceled.")
+		return true
+	}
+	if text == "" {
+		h.sendText(bot, msg.Chat.ID, "❌ Wallet name cannot be empty. Send wallet name or type `cancel`.")
+		return true
+	}
+	h.mu.Lock()
+	h.removal[msg.Chat.ID] = &removeWalletState{Name: text}
+	h.mu.Unlock()
+
+	kb := tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("✅ Yes, remove", "wallet_remove_confirm"),
+			tgbotapi.NewInlineKeyboardButtonData("❌ No, cancel", "wallet_remove_cancel"),
+		),
+	)
+	msgOut := tgbotapi.NewMessage(msg.Chat.ID, fmt.Sprintf("⚠️ Remove wallet(s) named `%s`?\n\nThis action cannot be undone.", text))
+	msgOut.ReplyMarkup = kb
+	_, _ = bot.Send(msgOut)
+	return true
+}
+
 func isSupported(list []string, value string) bool {
 	return slices.Contains(list, value)
 }
@@ -228,7 +281,7 @@ func (h *Handler) handleCallback(ctx context.Context, bot *tgbotapi.BotAPI, cb *
 	if cb.From != nil {
 		username = cb.From.UserName
 	}
-	u, err := h.repo.UpsertUser(ctx, chatID, username)
+	u, isNewUser, err := h.repo.UpsertUser(ctx, chatID, username)
 	if err != nil {
 		h.log.Printf("upsert user failed callback chat_id=%d err=%v", chatID, err)
 		h.sendText(bot, chatID, "Could not initialize user.")
@@ -239,6 +292,9 @@ func (h *Handler) handleCallback(ctx context.Context, bot *tgbotapi.BotAPI, cb *
 			h.log.Printf("ensure superuser failed chat_id=%d err=%v", chatID, err)
 		}
 		u, _ = h.repo.GetUserByTelegramID(ctx, chatID)
+	}
+	if isNewUser {
+		h.notifySuperuserNewSignup(bot, u)
 	}
 	data := cb.Data
 	h.audit(ctx, u, "callback", data)
@@ -260,6 +316,35 @@ func (h *Handler) handleCallback(ctx context.Context, bot *tgbotapi.BotAPI, cb *
 		h.states[chatID] = &walletCreateState{Step: 1}
 		h.mu.Unlock()
 		h.sendCancelablePrompt(bot, chatID, "📝 Send wallet name")
+	case data == "wallet_remove":
+		h.mu.Lock()
+		h.removal[chatID] = &removeWalletState{}
+		h.mu.Unlock()
+		h.sendText(bot, chatID, "🗑 Send wallet name to remove.\n\nType `cancel` to stop.")
+	case data == "wallet_remove_cancel":
+		h.mu.Lock()
+		delete(h.removal, chatID)
+		h.mu.Unlock()
+		h.sendText(bot, chatID, "🛑 Wallet removal canceled.")
+	case data == "wallet_remove_confirm":
+		h.mu.Lock()
+		rs, ok := h.removal[chatID]
+		delete(h.removal, chatID)
+		h.mu.Unlock()
+		if !ok || strings.TrimSpace(rs.Name) == "" {
+			h.sendText(bot, chatID, "ℹ️ No wallet removal request found.")
+			break
+		}
+		count, err := h.repo.DeleteWalletsByName(ctx, u.ID, rs.Name)
+		if err != nil {
+			h.sendText(bot, chatID, "❌ Failed to remove wallet.")
+			break
+		}
+		if count == 0 {
+			h.sendText(bot, chatID, fmt.Sprintf("ℹ️ No wallet found with name `%s`.", rs.Name))
+		} else {
+			h.sendText(bot, chatID, fmt.Sprintf("✅ Removed %d wallet(s) named `%s`.", count, rs.Name))
+		}
 	case data == "wallet_cancel":
 		h.mu.Lock()
 		_, exists := h.states[chatID]
@@ -406,6 +491,9 @@ func (h *Handler) sendWalletMenu(bot *tgbotapi.BotAPI, chatID int64) {
 		tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("➕ Add Wallet", "wallet_add"),
 			tgbotapi.NewInlineKeyboardButtonData("📜 List Wallets", "wallet_list"),
+		),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("🗑 Remove Wallet", "wallet_remove"),
 		),
 		tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("🛑 Cancel Setup", "wallet_cancel"),
@@ -628,6 +716,26 @@ func (h *Handler) sendProfile(ctx context.Context, bot *tgbotapi.BotAPI, chatID 
 func (h *Handler) audit(ctx context.Context, user models.User, action, details string) {
 	if err := h.repo.AddUserActivity(ctx, user.ID, user.TelegramID, user.Username, user.Role, action, details); err != nil {
 		h.log.Printf("activity log failed user_id=%s action=%s err=%v", user.ID, action, err)
+	}
+}
+
+func (h *Handler) notifySuperuserNewSignup(bot *tgbotapi.BotAPI, user models.User) {
+	if h.super <= 0 {
+		return
+	}
+	username := user.Username
+	if strings.TrimSpace(username) == "" {
+		username = "(not set)"
+	}
+	text := fmt.Sprintf(
+		"🆕 New user signed up\n\nTelegram ID: %d\nUsername: @%s\nRole: %s\nUser ID: %s",
+		user.TelegramID,
+		username,
+		user.Role,
+		user.ID,
+	)
+	if _, err := bot.Send(tgbotapi.NewMessage(h.super, text)); err != nil {
+		h.log.Printf("notify superuser signup failed super_tg=%d new_tg=%d err=%v", h.super, user.TelegramID, err)
 	}
 }
 
