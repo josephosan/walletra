@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"wallet_tracker_bot/internal/models"
-	"wallet_tracker_bot/internal/repo"
+	"walletra/internal/models"
+	"walletra/internal/repo"
 )
 
 type ReportService struct {

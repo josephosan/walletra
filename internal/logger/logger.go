@@ -6,5 +6,5 @@ import (
 )
 
 func New() *log.Logger {
-	return log.New(os.Stdout, "[wallet-tracker] ", log.LstdFlags|log.Lshortfile)
+	return log.New(os.Stdout, "[walletra] ", log.LstdFlags|log.Lshortfile)
 }

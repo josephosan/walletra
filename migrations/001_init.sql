@@ -44,8 +44,7 @@ CREATE TABLE IF NOT EXISTS wallet_transactions (
   amount_usd NUMERIC(38, 6),
   tx_timestamp TIMESTAMPTZ NOT NULL,
   raw_payload JSONB,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE(wallet_id, tx_hash, COALESCE(token_symbol,''), tx_timestamp)
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS user_settings (
@@ -58,4 +57,6 @@ CREATE TABLE IF NOT EXISTS user_settings (
 );
 
 CREATE INDEX IF NOT EXISTS idx_wallet_transactions_wallet_time ON wallet_transactions(wallet_id, tx_timestamp DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_wallet_transactions_dedupe
+  ON wallet_transactions(wallet_id, tx_hash, COALESCE(token_symbol,''), tx_timestamp);
 CREATE INDEX IF NOT EXISTS idx_wallets_user ON wallets(user_id);

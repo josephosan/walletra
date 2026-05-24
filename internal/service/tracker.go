@@ -5,8 +5,8 @@ import (
 	"log"
 	"time"
 
-	"wallet_tracker_bot/internal/repo"
-	"wallet_tracker_bot/internal/tracker"
+	"walletra/internal/repo"
+	"walletra/internal/tracker"
 )
 
 type TrackerService struct {
@@ -25,7 +25,10 @@ func (s *TrackerService) PollOnce(ctx context.Context) {
 		s.log.Printf("poll list wallets error: %v", err)
 		return
 	}
+	s.log.Printf("poll cycle started wallets=%d", len(wallets))
 	now := time.Now().UTC()
+	totalFetched := 0
+	totalInserted := 0
 	for _, w := range wallets {
 		since := now.Add(-1 * time.Hour)
 		if w.LastPolledAt != nil {
@@ -41,13 +44,18 @@ func (s *TrackerService) PollOnce(ctx context.Context) {
 			s.log.Printf("provider error wallet=%s err=%v", w.ID, err)
 			continue
 		}
+		totalFetched += len(txs)
+		s.log.Printf("wallet polled wallet_id=%s name=%q chain=%s fetched_txs=%d since=%s", w.ID, w.Name, w.Chain, len(txs), since.Format(time.RFC3339))
 		if len(txs) > 0 {
 			if err := s.repo.InsertWalletTransactions(ctx, txs); err != nil {
 				s.log.Printf("insert txs error wallet=%s err=%v", w.ID, err)
+			} else {
+				totalInserted += len(txs)
 			}
 		}
 		if err := s.repo.MarkWalletPolled(ctx, w.ID, now); err != nil {
 			s.log.Printf("mark polled error wallet=%s err=%v", w.ID, err)
 		}
 	}
+	s.log.Printf("poll cycle completed wallets=%d fetched_txs=%d inserted_txs=%d", len(wallets), totalFetched, totalInserted)
 }

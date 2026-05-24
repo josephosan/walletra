@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+
+	"github.com/joho/godotenv"
 )
 
 type Config struct {
@@ -17,6 +19,9 @@ type Config struct {
 }
 
 func Load() (Config, error) {
+	// Best-effort local env loading. In Docker/production, process env still wins.
+	_ = godotenv.Load(".env")
+
 	superUser, err := strconv.ParseInt(getEnv("SUPERUSER_TELEGRAM_ID", "0"), 10, 64)
 	if err != nil {
 		return Config{}, fmt.Errorf("parse SUPERUSER_TELEGRAM_ID: %w", err)

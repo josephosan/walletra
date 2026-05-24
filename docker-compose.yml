@@ -1,10 +1,10 @@
 services:
   postgres:
     image: postgres:16
-    container_name: wallet-tracker-postgres
+    container_name: walletra-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: wallet_tracker
+      POSTGRES_DB: walletra
       POSTGRES_USER: wallet
       POSTGRES_PASSWORD: wallet
     ports:
@@ -15,7 +15,7 @@ services:
 
   bot:
     build: .
-    container_name: wallet-tracker-bot
+    container_name: walletra-bot
     restart: unless-stopped
     env_file:
       - .env

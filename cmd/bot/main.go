@@ -10,14 +10,14 @@ import (
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 
-	"wallet_tracker_bot/internal/bot"
-	"wallet_tracker_bot/internal/config"
-	"wallet_tracker_bot/internal/db"
-	"wallet_tracker_bot/internal/logger"
-	"wallet_tracker_bot/internal/repo"
-	"wallet_tracker_bot/internal/scheduler"
-	"wallet_tracker_bot/internal/service"
-	"wallet_tracker_bot/internal/tracker"
+	"walletra/internal/bot"
+	"walletra/internal/config"
+	"walletra/internal/db"
+	"walletra/internal/logger"
+	"walletra/internal/repo"
+	"walletra/internal/scheduler"
+	"walletra/internal/service"
+	"walletra/internal/tracker"
 )
 
 func main() {
@@ -44,6 +44,16 @@ func main() {
 	l.Printf("bot authorized as @%s", telegramBot.Self.UserName)
 
 	r := repo.New(dbPool)
+	if cfg.SuperUserTelegram > 0 {
+		updated, err := r.EnsureSuperUserByTelegramID(ctx, cfg.SuperUserTelegram)
+		if err != nil {
+			l.Printf("superuser bootstrap failed telegram_id=%d err=%v", cfg.SuperUserTelegram, err)
+		} else if updated {
+			l.Printf("superuser role ensured telegram_id=%d", cfg.SuperUserTelegram)
+		} else {
+			l.Printf("superuser telegram_id=%d is not registered yet; role will be applied after first /start", cfg.SuperUserTelegram)
+		}
+	}
 	reportSvc := service.NewReportService(r)
 	provider := tracker.NewCovalentProvider(cfg.CovalentAPIKey)
 	trackerSvc := service.NewTrackerService(r, provider, l)

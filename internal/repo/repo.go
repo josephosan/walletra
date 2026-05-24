@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"wallet_tracker_bot/internal/models"
+	"walletra/internal/models"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -18,23 +18,27 @@ type Repository struct {
 
 func New(db *pgxpool.Pool) *Repository { return &Repository{db: db} }
 
-func (r *Repository) UpsertUser(ctx context.Context, telegramID int64, username string, isSuper bool) (models.User, error) {
-	role := models.RoleUser
-	if isSuper {
-		role = models.RoleSuperUser
-	}
+func (r *Repository) UpsertUser(ctx context.Context, telegramID int64, username string) (models.User, error) {
 	q := `
 INSERT INTO users(telegram_id, username, role)
 VALUES ($1,$2,$3)
 ON CONFLICT (telegram_id)
-DO UPDATE SET username=EXCLUDED.username, role=EXCLUDED.role, updated_at=NOW()
+DO UPDATE SET username=EXCLUDED.username, updated_at=NOW()
 RETURNING id, telegram_id, username, role`
 	var u models.User
-	if err := r.db.QueryRow(ctx, q, telegramID, username, role).Scan(&u.ID, &u.TelegramID, &u.Username, &u.Role); err != nil {
+	if err := r.db.QueryRow(ctx, q, telegramID, username, models.RoleUser).Scan(&u.ID, &u.TelegramID, &u.Username, &u.Role); err != nil {
 		return u, err
 	}
 	_, _ = r.db.Exec(ctx, `INSERT INTO user_settings(user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING`, u.ID)
 	return u, nil
+}
+
+func (r *Repository) EnsureSuperUserByTelegramID(ctx context.Context, telegramID int64) (bool, error) {
+	cmd, err := r.db.Exec(ctx, `UPDATE users SET role='superuser', updated_at=NOW() WHERE telegram_id=$1`, telegramID)
+	if err != nil {
+		return false, err
+	}
+	return cmd.RowsAffected() > 0, nil
 }
 
 func (r *Repository) GetUserByTelegramID(ctx context.Context, telegramID int64) (models.User, error) {
@@ -83,6 +87,12 @@ func (r *Repository) ListWalletsByUser(ctx context.Context, userID string) ([]mo
 		wallets = append(wallets, w)
 	}
 	return wallets, rows.Err()
+}
+
+func (r *Repository) CountWalletsByUser(ctx context.Context, userID string) (int, error) {
+	var n int
+	err := r.db.QueryRow(ctx, `SELECT COUNT(*) FROM wallets WHERE user_id=$1`, userID).Scan(&n)
+	return n, err
 }
 
 func (r *Repository) ListWalletsForPolling(ctx context.Context) ([]models.Wallet, error) {

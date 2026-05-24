@@ -7,9 +7,9 @@ import (
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 
-	"wallet_tracker_bot/internal/models"
-	"wallet_tracker_bot/internal/repo"
-	"wallet_tracker_bot/internal/service"
+	"walletra/internal/models"
+	"walletra/internal/repo"
+	"walletra/internal/service"
 )
 
 type Scheduler struct {
@@ -27,6 +27,7 @@ func New(log *log.Logger, repo *repo.Repository, tracker *service.TrackerService
 func (s *Scheduler) Start(ctx context.Context, pollInterval time.Duration) {
 	pollTicker := time.NewTicker(pollInterval)
 	reportTicker := time.NewTicker(10 * time.Minute)
+	s.log.Printf("scheduler started poll_interval=%s report_check_interval=%s", pollInterval, 10*time.Minute)
 
 	go func() {
 		defer pollTicker.Stop()
@@ -34,10 +35,13 @@ func (s *Scheduler) Start(ctx context.Context, pollInterval time.Duration) {
 		for {
 			select {
 			case <-ctx.Done():
+				s.log.Printf("scheduler stopped")
 				return
 			case <-pollTicker.C:
+				s.log.Printf("scheduler tick: polling wallets")
 				s.tracker.PollOnce(ctx)
 			case <-reportTicker.C:
+				s.log.Printf("scheduler tick: checking due reports")
 				s.dispatchReports(ctx)
 			}
 		}
@@ -51,6 +55,7 @@ func (s *Scheduler) dispatchReports(ctx context.Context) {
 		s.log.Printf("users due error: %v", err)
 		return
 	}
+	s.log.Printf("report dispatch run due_users=%d", len(users))
 	for _, u := range users {
 		settings, err := s.repo.GetSettings(ctx, u.ID)
 		if err != nil {
@@ -67,9 +72,12 @@ func (s *Scheduler) dispatchReports(ctx context.Context) {
 			s.log.Printf("send report error tg=%d err=%v", u.TelegramID, err)
 			continue
 		}
+		s.log.Printf("report sent user_id=%s tg_id=%d freq=%s", u.ID, u.TelegramID, settings.ReportFrequency)
 		next := service.NextRunAt(now, models.Frequency(settings.ReportFrequency))
 		if err := s.repo.SetNextReportAt(ctx, u.ID, next); err != nil {
 			s.log.Printf("set next run error user=%s err=%v", u.ID, err)
+		} else {
+			s.log.Printf("next report scheduled user_id=%s at=%s", u.ID, next.Format(time.RFC3339))
 		}
 	}
 }
