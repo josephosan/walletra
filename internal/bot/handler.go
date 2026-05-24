@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -100,6 +102,7 @@ func (h *Handler) handleMessage(ctx context.Context, bot *tgbotapi.BotAPI, msg *
 		u, _ = h.repo.GetUserByTelegramID(ctx, msg.Chat.ID)
 	}
 	h.log.Printf("user loaded chat_id=%d user_id=%s role=%s", msg.Chat.ID, u.ID, u.Role)
+	h.audit(ctx, u, "message", msg.Text)
 
 	if h.handleWalletWizard(ctx, bot, msg, u.ID) {
 		return
@@ -130,8 +133,13 @@ func (h *Handler) handleMessage(ctx context.Context, bot *tgbotapi.BotAPI, msg *
 			),
 		)
 	default:
+		if strings.HasPrefix(msg.Text, "/") {
+			if h.handleSlashCommand(ctx, bot, msg, u) {
+				return
+			}
+		}
 		h.log.Printf("unhandled message chat_id=%d text=%q", msg.Chat.ID, msg.Text)
-		h.sendText(bot, msg.Chat.ID, "❓ Use /start or the menu buttons.")
+		h.sendText(bot, msg.Chat.ID, "❓ Use /start or the menu buttons.\n\nUse /help for command help.")
 	}
 }
 
@@ -232,9 +240,20 @@ func (h *Handler) handleCallback(ctx context.Context, bot *tgbotapi.BotAPI, cb *
 		}
 		u, _ = h.repo.GetUserByTelegramID(ctx, chatID)
 	}
-
 	data := cb.Data
+	h.audit(ctx, u, "callback", data)
 	switch {
+	case strings.HasPrefix(data, "admin_users_page:"):
+		if u.Role != models.RoleSuperUser {
+			h.sendText(bot, chatID, "⛔ Superuser only.")
+			break
+		}
+		pageStr := strings.TrimPrefix(data, "admin_users_page:")
+		page, err := strconv.Atoi(pageStr)
+		if err != nil || page < 1 {
+			page = 1
+		}
+		h.sendAdminUsersPage(ctx, bot, chatID, page)
 	case data == "wallet_add":
 		h.log.Printf("wallet_add clicked chat_id=%d", chatID)
 		h.mu.Lock()
@@ -328,6 +347,58 @@ func (h *Handler) handleCallback(ctx context.Context, bot *tgbotapi.BotAPI, cb *
 	_, _ = bot.Request(tgbotapi.NewCallback(cb.ID, "ok"))
 }
 
+func (h *Handler) handleSlashCommand(ctx context.Context, bot *tgbotapi.BotAPI, msg *tgbotapi.Message, user models.User) bool {
+	text := strings.TrimSpace(msg.Text)
+	parts := strings.Fields(text)
+	if len(parts) == 0 {
+		return false
+	}
+	cmd := parts[0]
+
+	switch cmd {
+	case "/help":
+		h.sendHelp(bot, msg.Chat.ID)
+		h.audit(ctx, user, "cmd_help", "")
+		return true
+	case "/profile":
+		h.sendProfile(ctx, bot, msg.Chat.ID, user)
+		h.audit(ctx, user, "cmd_profile", "")
+		return true
+	case "/admin", "/admin_help":
+		if user.Role != models.RoleSuperUser {
+			h.sendText(bot, msg.Chat.ID, "⛔ Superuser only.")
+			return true
+		}
+		h.sendAdminHelp(bot, msg.Chat.ID)
+		h.audit(ctx, user, "cmd_admin_help", "")
+		return true
+	case "/admin_users":
+		if user.Role != models.RoleSuperUser {
+			h.sendText(bot, msg.Chat.ID, "⛔ Superuser only.")
+			return true
+		}
+		page := 1
+		if len(parts) >= 2 {
+			if p, err := strconv.Atoi(parts[1]); err == nil && p > 0 {
+				page = p
+			}
+		}
+		h.sendAdminUsersPage(ctx, bot, msg.Chat.ID, page)
+		h.audit(ctx, user, "cmd_admin_users", fmt.Sprintf("page=%d", page))
+		return true
+	case "/admin_activity":
+		if user.Role != models.RoleSuperUser {
+			h.sendText(bot, msg.Chat.ID, "⛔ Superuser only.")
+			return true
+		}
+		h.sendAdminActivities(ctx, bot, msg.Chat.ID, parts[1:])
+		h.audit(ctx, user, "cmd_admin_activity", strings.Join(parts[1:], " "))
+		return true
+	default:
+		return false
+	}
+}
+
 func (h *Handler) sendWalletMenu(bot *tgbotapi.BotAPI, chatID int64) {
 	kb := tgbotapi.NewInlineKeyboardMarkup(
 		tgbotapi.NewInlineKeyboardRow(
@@ -398,6 +469,110 @@ func (h *Handler) sendText(bot *tgbotapi.BotAPI, chatID int64, text string) {
 	_, _ = bot.Send(tgbotapi.NewMessage(chatID, text))
 }
 
+func (h *Handler) sendHelp(bot *tgbotapi.BotAPI, chatID int64) {
+	h.sendText(bot, chatID, "📘 Help Center\n\n/start - Start bot\n/profile - Your profile\n/help - This help\n\nIf you are superuser, use /admin.")
+}
+
+func (h *Handler) sendAdminHelp(bot *tgbotapi.BotAPI, chatID int64) {
+	h.sendText(bot, chatID, "🛡️ Superuser Help Center\n\n/admin - Open this help\n/admin_users [page] - List users with pagination\n/admin_activity - Recent activities (all users)\n/admin_activity <telegram_id> - Activities for one user\n/admin_activity <telegram_id> <YYYY-MM-DDTHH> - One user activities in specific hour (UTC)\n\nExample:\n/admin_activity 123456789 2026-05-24T18")
+}
+
+func (h *Handler) sendAdminUsersPage(ctx context.Context, bot *tgbotapi.BotAPI, chatID int64, page int) {
+	const pageSize = 10
+	users, total, err := h.repo.ListUsersPaginated(ctx, page, pageSize)
+	if err != nil {
+		h.sendText(bot, chatID, "❌ Failed to load users.")
+		return
+	}
+	totalPages := int(math.Ceil(float64(total) / float64(pageSize)))
+	if totalPages == 0 {
+		totalPages = 1
+	}
+	if page > totalPages {
+		page = totalPages
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("👥 Registered Users (page %d/%d)\n\n", page, totalPages))
+	for _, u := range users {
+		un := u.Username
+		if un == "" {
+			un = "(no username)"
+		}
+		sb.WriteString(fmt.Sprintf("• tg:%d | @%s | role:%s\n", u.TelegramID, un, u.Role))
+	}
+	if len(users) == 0 {
+		sb.WriteString("No users found.\n")
+	}
+
+	rows := []tgbotapi.InlineKeyboardButton{}
+	if page > 1 {
+		rows = append(rows, tgbotapi.NewInlineKeyboardButtonData("⬅️ Prev", fmt.Sprintf("admin_users_page:%d", page-1)))
+	}
+	if page < totalPages {
+		rows = append(rows, tgbotapi.NewInlineKeyboardButtonData("Next ➡️", fmt.Sprintf("admin_users_page:%d", page+1)))
+	}
+
+	msg := tgbotapi.NewMessage(chatID, sb.String())
+	if len(rows) > 0 {
+		msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(rows...))
+	}
+	_, _ = bot.Send(msg)
+}
+
+func (h *Handler) sendAdminActivities(ctx context.Context, bot *tgbotapi.BotAPI, chatID int64, args []string) {
+	var tgID *int64
+	var hour *time.Time
+
+	if len(args) >= 1 {
+		v, err := strconv.ParseInt(args[0], 10, 64)
+		if err != nil {
+			h.sendText(bot, chatID, "❌ Invalid telegram id.\nUse: /admin_activity <telegram_id> <YYYY-MM-DDTHH>")
+			return
+		}
+		tgID = &v
+	}
+	if len(args) >= 2 {
+		t, err := time.Parse("2006-01-02T15", args[1])
+		if err != nil {
+			h.sendText(bot, chatID, "❌ Invalid hour format.\nUse UTC hour like: 2026-05-24T18")
+			return
+		}
+		tt := t.UTC()
+		hour = &tt
+	}
+
+	activities, total, err := h.repo.ListUserActivities(ctx, tgID, hour, 1, 50)
+	if err != nil {
+		h.sendText(bot, chatID, "❌ Failed to load activities.")
+		return
+	}
+
+	var header strings.Builder
+	header.WriteString("📜 User Activities\n")
+	if tgID != nil {
+		header.WriteString(fmt.Sprintf("User: %d\n", *tgID))
+	}
+	if hour != nil {
+		header.WriteString(fmt.Sprintf("Hour(UTC): %s\n", hour.Format("2006-01-02T15")))
+	}
+	header.WriteString(fmt.Sprintf("Total: %d\n\n", total))
+
+	var body strings.Builder
+	max := len(activities)
+	if max > 20 {
+		max = 20
+	}
+	for i := 0; i < max; i++ {
+		a := activities[i]
+		body.WriteString(fmt.Sprintf("• %s | tg:%d | %s\n  action: %s\n  details: %s\n", a.CreatedAt.UTC().Format(time.RFC3339), a.ActorTelegramID, a.ActorRole, a.Action, a.Details))
+	}
+	if len(activities) == 0 {
+		body.WriteString("No activities found.")
+	}
+	h.sendText(bot, chatID, header.String()+body.String())
+}
+
 func (h *Handler) sendProfile(ctx context.Context, bot *tgbotapi.BotAPI, chatID int64, user models.User) {
 	settings, err := h.repo.GetSettings(ctx, user.ID)
 	if err != nil {
@@ -424,6 +599,12 @@ func (h *Handler) sendProfile(ctx context.Context, bot *tgbotapi.BotAPI, chatID 
 		settings.Timezone,
 	)
 	_, _ = bot.Send(tgbotapi.NewMessage(chatID, profile))
+}
+
+func (h *Handler) audit(ctx context.Context, user models.User, action, details string) {
+	if err := h.repo.AddUserActivity(ctx, user.ID, user.TelegramID, user.Username, user.Role, action, details); err != nil {
+		h.log.Printf("activity log failed user_id=%s action=%s err=%v", user.ID, action, err)
+	}
 }
 
 func splitCSV(v string) []string {

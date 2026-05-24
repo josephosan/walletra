@@ -11,6 +11,7 @@ Telegram bot to track wallet transactions and generate hourly/daily/monthly/year
 - Poll wallets every 30 minutes (configurable)
 - Scheduled auto reports per user settings
 - On-demand reports from Telegram buttons
+- Superuser command center (`/admin`, `/admin_users`, `/admin_activity`)
 - Settings:
   - report frequency (`hourly`, `daily`, `monthly`, `yearly`)
   - include unchanged wallets toggle
@@ -56,3 +57,7 @@ Telegram bot to track wallet transactions and generate hourly/daily/monthly/year
 - Settings:
   - Auto report frequency
   - Include unchanged wallets toggle
+- Superuser:
+  - `/admin` for help center
+  - `/admin_users [page]` for paginated user list
+  - `/admin_activity <telegram_id> <YYYY-MM-DDTHH>` for one user in a specific UTC hour

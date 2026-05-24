@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"walletra/internal/models"
@@ -93,6 +94,107 @@ func (r *Repository) CountWalletsByUser(ctx context.Context, userID string) (int
 	var n int
 	err := r.db.QueryRow(ctx, `SELECT COUNT(*) FROM wallets WHERE user_id=$1`, userID).Scan(&n)
 	return n, err
+}
+
+func (r *Repository) AddUserActivity(ctx context.Context, actorUserID string, actorTelegramID int64, actorUsername string, actorRole models.Role, action, details string) error {
+	_, err := r.db.Exec(ctx, `
+INSERT INTO user_activities(actor_user_id, actor_telegram_id, actor_username, actor_role, action, details)
+VALUES ($1,$2,$3,$4,$5,$6)`,
+		nullableUUID(actorUserID), actorTelegramID, actorUsername, actorRole, action, details)
+	return err
+}
+
+func (r *Repository) ListUsersPaginated(ctx context.Context, page, pageSize int) ([]models.User, int, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 10
+	}
+	offset := (page - 1) * pageSize
+
+	var total int
+	if err := r.db.QueryRow(ctx, `SELECT COUNT(*) FROM users`).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	rows, err := r.db.Query(ctx, `
+SELECT id, telegram_id, username, role
+FROM users
+ORDER BY created_at DESC
+LIMIT $1 OFFSET $2`, pageSize, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	out := make([]models.User, 0, pageSize)
+	for rows.Next() {
+		var u models.User
+		if err := rows.Scan(&u.ID, &u.TelegramID, &u.Username, &u.Role); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, u)
+	}
+	return out, total, rows.Err()
+}
+
+func (r *Repository) ListUserActivities(ctx context.Context, userTelegramID *int64, hourStart *time.Time, page, pageSize int) ([]models.UserActivity, int, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 20
+	}
+	offset := (page - 1) * pageSize
+
+	where := make([]string, 0, 2)
+	args := make([]any, 0, 6)
+	argPos := 1
+
+	if userTelegramID != nil {
+		where = append(where, fmt.Sprintf("actor_telegram_id=$%d", argPos))
+		args = append(args, *userTelegramID)
+		argPos++
+	}
+	if hourStart != nil {
+		where = append(where, fmt.Sprintf("created_at >= $%d AND created_at < $%d", argPos, argPos+1))
+		args = append(args, *hourStart, hourStart.Add(time.Hour))
+		argPos += 2
+	}
+
+	whereSQL := ""
+	if len(where) > 0 {
+		whereSQL = " WHERE " + strings.Join(where, " AND ")
+	}
+
+	countSQL := "SELECT COUNT(*) FROM user_activities" + whereSQL
+	var total int
+	if err := r.db.QueryRow(ctx, countSQL, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	args = append(args, pageSize, offset)
+	listSQL := fmt.Sprintf(`
+SELECT id, COALESCE(actor_user_id::text,''), actor_telegram_id, COALESCE(actor_username,''), actor_role, action, COALESCE(details,''), created_at
+FROM user_activities%s
+ORDER BY created_at DESC
+LIMIT $%d OFFSET $%d`, whereSQL, argPos, argPos+1)
+	rows, err := r.db.Query(ctx, listSQL, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	out := make([]models.UserActivity, 0, pageSize)
+	for rows.Next() {
+		var a models.UserActivity
+		if err := rows.Scan(&a.ID, &a.ActorUserID, &a.ActorTelegramID, &a.ActorUsername, &a.ActorRole, &a.Action, &a.Details, &a.CreatedAt); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, a)
+	}
+	return out, total, rows.Err()
 }
 
 func (r *Repository) ListWalletsForPolling(ctx context.Context) ([]models.Wallet, error) {
@@ -238,4 +340,11 @@ func Wrap(msg string, err error) error {
 		return nil
 	}
 	return fmt.Errorf("%s: %w", msg, err)
+}
+
+func nullableUUID(v string) any {
+	if strings.TrimSpace(v) == "" {
+		return nil
+	}
+	return v
 }

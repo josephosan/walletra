@@ -66,3 +66,14 @@ type ReportRow struct {
 	Direction  string
 	Amount     float64
 }
+
+type UserActivity struct {
+	ID              string
+	ActorUserID     string
+	ActorTelegramID int64
+	ActorUsername   string
+	ActorRole       Role
+	Action          string
+	Details         string
+	CreatedAt       time.Time
+}
