@@ -359,22 +359,43 @@ func (h *Handler) handleCallback(ctx context.Context, bot *tgbotapi.BotAPI, cb *
 			sb.WriteString(fmt.Sprintf("• %s | %s | %s\n", w.Name, w.Chain, w.Address))
 		}
 		h.sendText(bot, chatID, sb.String())
-	case strings.HasPrefix(data, "report_"):
-		freq := models.Frequency(strings.TrimPrefix(data, "report_"))
-		h.log.Printf("manual report requested user_id=%s freq=%s", u.ID, freq)
+	case strings.HasPrefix(data, "report_all:"):
+		freq := models.Frequency(strings.TrimPrefix(data, "report_all:"))
+		h.log.Printf("manual all-wallet report requested user_id=%s freq=%s", u.ID, freq)
 		settings, err := h.repo.GetSettings(ctx, u.ID)
 		if err != nil {
-			h.log.Printf("get settings failed user_id=%s err=%v", u.ID, err)
 			h.sendText(bot, chatID, "❌ Failed to read settings")
 			break
 		}
 		text, err := h.report.BuildReportText(ctx, u.ID, freq, settings.IncludeUnchangedWallets, time.Now().UTC())
 		if err != nil {
-			h.log.Printf("build report failed user_id=%s freq=%s err=%v", u.ID, freq, err)
 			h.sendText(bot, chatID, "❌ Failed to generate report")
 			break
 		}
 		h.sendText(bot, chatID, text)
+	case strings.HasPrefix(data, "report_wallet:"):
+		parts := strings.SplitN(strings.TrimPrefix(data, "report_wallet:"), ":", 2)
+		if len(parts) != 2 {
+			h.sendText(bot, chatID, "❌ Invalid wallet report request.")
+			break
+		}
+		freq := models.Frequency(parts[0])
+		walletID := parts[1]
+		h.log.Printf("manual wallet report requested user_id=%s wallet_id=%s freq=%s", u.ID, walletID, freq)
+		settings, err := h.repo.GetSettings(ctx, u.ID)
+		if err != nil {
+			h.sendText(bot, chatID, "❌ Failed to read settings")
+			break
+		}
+		text, err := h.report.BuildWalletReportText(ctx, u.ID, walletID, freq, settings.IncludeUnchangedWallets, time.Now().UTC())
+		if err != nil {
+			h.sendText(bot, chatID, "❌ Failed to generate wallet report")
+			break
+		}
+		h.sendText(bot, chatID, text)
+	case strings.HasPrefix(data, "report_"):
+		freq := models.Frequency(strings.TrimPrefix(data, "report_"))
+		h.sendWalletReportPicker(ctx, bot, chatID, u.ID, freq)
 	case strings.HasPrefix(data, "freq_"):
 		freq := models.Frequency(strings.TrimPrefix(data, "freq_"))
 		h.log.Printf("frequency update requested user_id=%s freq=%s", u.ID, freq)
@@ -501,6 +522,32 @@ func (h *Handler) sendReportMenu(bot *tgbotapi.BotAPI, chatID int64) {
 	)
 	msg := tgbotapi.NewMessage(chatID, "📊 Choose report period:\n")
 	msg.ReplyMarkup = kb
+	_, _ = bot.Send(msg)
+}
+
+func (h *Handler) sendWalletReportPicker(ctx context.Context, bot *tgbotapi.BotAPI, chatID int64, userID string, freq models.Frequency) {
+	wallets, err := h.repo.ListWalletsByUser(ctx, userID)
+	if err != nil {
+		h.sendText(bot, chatID, "❌ Failed to load wallets for report.")
+		return
+	}
+	if len(wallets) == 0 {
+		h.sendText(bot, chatID, "👛 No wallets available. Add a wallet first.")
+		return
+	}
+
+	rows := make([][]tgbotapi.InlineKeyboardButton, 0, len(wallets)+1)
+	rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+		tgbotapi.NewInlineKeyboardButtonData("📦 All Wallets", "report_all:"+string(freq)),
+	))
+	for _, w := range wallets {
+		label := fmt.Sprintf("👛 %s", w.Name)
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData(label, "report_wallet:"+string(freq)+":"+w.ID),
+		))
+	}
+	msg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Select wallet for %s report:", freq))
+	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(rows...)
 	_, _ = bot.Send(msg)
 }
 

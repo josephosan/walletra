@@ -369,6 +369,40 @@ ORDER BY w.name, t.token_symbol`
 	return out, rows.Err()
 }
 
+func (r *Repository) AggregateReportForWallet(ctx context.Context, userID, walletID string, from, to time.Time, includeUnchanged bool) ([]models.ReportRow, error) {
+	q := `
+SELECT w.name, w.address, w.chain,
+       COALESCE(t.token_symbol, '-'),
+       COALESCE(t.direction, '-'),
+       COALESCE(SUM(t.amount)::float8, 0)
+FROM wallets w
+LEFT JOIN wallet_transactions t
+  ON t.wallet_id=w.id
+ AND t.tx_timestamp >= $3
+ AND t.tx_timestamp < $4
+WHERE w.user_id=$1 AND w.id=$2
+GROUP BY w.name, w.address, w.chain, t.token_symbol, t.direction
+ORDER BY w.name, t.token_symbol`
+	rows, err := r.db.Query(ctx, q, userID, walletID, from, to)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]models.ReportRow, 0)
+	for rows.Next() {
+		var rrow models.ReportRow
+		if err := rows.Scan(&rrow.WalletName, &rrow.Address, &rrow.Chain, &rrow.Token, &rrow.Direction, &rrow.Amount); err != nil {
+			return nil, err
+		}
+		if !includeUnchanged && rrow.Amount == 0 {
+			continue
+		}
+		out = append(out, rrow)
+	}
+	return out, rows.Err()
+}
+
 func EncodePayload(v any) []byte {
 	b, _ := json.Marshal(v)
 	return b
