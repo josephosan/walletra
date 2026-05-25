@@ -66,7 +66,7 @@ func (p *PolygonDirectProvider) FetchWalletTransactions(ctx context.Context, wal
 	if !p.SupportsChain(wallet.Chain) {
 		return nil, nil
 	}
-	start, err := p.resolveStartBlock(ctx)
+	start, err := p.resolveStartBlock(ctx, wallet, since)
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +120,23 @@ func (p *PolygonDirectProvider) FetchWalletTransactions(ctx context.Context, wal
 	return out, nil
 }
 
-func (p *PolygonDirectProvider) resolveStartBlock(ctx context.Context) (int64, error) {
+func (p *PolygonDirectProvider) resolveStartBlock(ctx context.Context, wallet models.Wallet, since time.Time) (int64, error) {
+	// New wallet bootstrap: backfill from nearest block around `since`.
+	if wallet.LastPolledAt == nil {
+		latest, err := p.client.BlockNumber(ctx)
+		if err != nil {
+			return 0, fmt.Errorf("latest block for bootstrap: %w", err)
+		}
+		start, err := p.findBlockByTimestamp(ctx, since.Unix(), p.startBlock, int64(latest))
+		if err != nil {
+			return 0, fmt.Errorf("bootstrap block by timestamp: %w", err)
+		}
+		if start < p.startBlock {
+			start = p.startBlock
+		}
+		return start, nil
+	}
+
 	state, err := p.repo.GetPolygonIndexerState(ctx, "matic-mainnet")
 	if err == nil {
 		// Reorg safety check: verify stored block hash still matches chain.
@@ -140,6 +156,30 @@ func (p *PolygonDirectProvider) resolveStartBlock(ctx context.Context) (int64, e
 		return 0, fmt.Errorf("read polygon indexer state: %w", err)
 	}
 	return p.startBlock, nil
+}
+
+func (p *PolygonDirectProvider) findBlockByTimestamp(ctx context.Context, targetTS, low, high int64) (int64, error) {
+	if low < 0 {
+		low = 0
+	}
+	best := low
+	for low <= high {
+		mid := (low + high) / 2
+		h, err := p.client.HeaderByNumber(ctx, big.NewInt(mid))
+		if err != nil {
+			return 0, fmt.Errorf("header by number %d: %w", mid, err)
+		}
+		ts := int64(h.Time)
+		if ts < targetTS {
+			best = mid
+			low = mid + 1
+		} else if ts > targetTS {
+			high = mid - 1
+		} else {
+			return mid, nil
+		}
+	}
+	return best, nil
 }
 
 func (p *PolygonDirectProvider) scanRange(

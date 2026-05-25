@@ -30,11 +30,13 @@ type Handler struct {
 }
 
 type walletCreateState struct {
-	Step    int
-	Name    string
-	Address string
-	Chain   string
-	Coin    string
+	Step            int
+	Name            string
+	Address         string
+	Chain           string
+	Coin            string
+	Tokens          []string
+	CustomTokenMode bool
 }
 
 type removeWalletState struct {
@@ -171,40 +173,131 @@ func (h *Handler) handleWalletWizard(ctx context.Context, bot *tgbotapi.BotAPI, 
 	case 2:
 		st.Address = text
 		st.Step = 3
-		h.sendText(bot, msg.Chat.ID, fmt.Sprintf("🌐 Send chain (supported only):\n\n%s", bulletList(supportedChains)))
-	case 3:
-		chain := strings.ToLower(text)
-		if !isSupported(supportedChains, chain) {
-			h.sendText(bot, msg.Chat.ID, fmt.Sprintf("❌ Unsupported chain.\n\nChoose one of:\n\n%s", bulletList(supportedChains)))
-			return true
-		}
-		st.Chain = chain
-		st.Step = 4
-		h.sendText(bot, msg.Chat.ID, fmt.Sprintf("🪙 Send base coin (supported only):\n\n%s", bulletList(supportedBaseCoins)))
-	case 4:
-		coin := strings.ToUpper(text)
-		if !isSupported(supportedBaseCoins, coin) {
-			h.sendText(bot, msg.Chat.ID, fmt.Sprintf("❌ Unsupported base coin.\n\nChoose one of:\n\n%s", bulletList(supportedBaseCoins)))
-			return true
-		}
-		st.Coin = coin
-		st.Step = 5
-		h.sendText(bot, msg.Chat.ID, "🧾 Send token symbols to track.\n\nExample: `PEPE,USDT,LINK`")
+		h.sendChainPicker(bot, msg.Chat.ID)
 	case 5:
-		tokens := splitCSV(text)
-		err := h.repo.AddWallet(ctx, userID, st.Name, st.Address, st.Chain, st.Coin, tokens)
+		if !st.CustomTokenMode {
+			h.sendText(bot, msg.Chat.ID, "Use token buttons below.")
+			return true
+		}
+		st.CustomTokenMode = false
+		custom := splitCSV(text)
+		st.Tokens = uniqTokens(append(st.Tokens, custom...))
+		h.finishWalletCreate(ctx, bot, msg.Chat.ID, userID, st)
 		h.mu.Lock()
 		delete(h.states, msg.Chat.ID)
 		h.mu.Unlock()
-		if err != nil {
-			h.log.Printf("wallet create failed user_id=%s name=%q address=%q chain=%q err=%v", userID, st.Name, st.Address, st.Chain, err)
-			h.sendText(bot, msg.Chat.ID, "❌ Failed to save wallet.")
-			return true
-		}
-		h.log.Printf("wallet created user_id=%s name=%q address=%q chain=%q tokens=%v", userID, st.Name, st.Address, st.Chain, tokens)
-		h.sendText(bot, msg.Chat.ID, "✅ Wallet saved and added to tracking.")
 	}
 	return true
+}
+
+func (h *Handler) finishWalletCreate(ctx context.Context, bot *tgbotapi.BotAPI, chatID int64, userID string, st *walletCreateState) {
+	err := h.repo.AddWallet(ctx, userID, st.Name, st.Address, st.Chain, st.Coin, st.Tokens)
+	if err != nil {
+		h.log.Printf("wallet create failed user_id=%s name=%q address=%q chain=%q err=%v", userID, st.Name, st.Address, st.Chain, err)
+		h.sendText(bot, chatID, "❌ Failed to save wallet.")
+		return
+	}
+	h.log.Printf("wallet created user_id=%s name=%q address=%q chain=%q tokens=%v", userID, st.Name, st.Address, st.Chain, st.Tokens)
+	h.sendText(bot, chatID, "✅ Wallet saved and added to tracking.")
+}
+
+func uniqTokens(tokens []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(tokens))
+	for _, t := range tokens {
+		x := strings.ToUpper(strings.TrimSpace(t))
+		if x == "" || seen[x] {
+			continue
+		}
+		seen[x] = true
+		out = append(out, x)
+	}
+	return out
+}
+
+func (h *Handler) sendChainPicker(bot *tgbotapi.BotAPI, chatID int64) {
+	rows := make([][]tgbotapi.InlineKeyboardButton, 0, len(supportedChains))
+	for _, c := range supportedChains {
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("🌐 "+c, "wallet_chain:"+c),
+		))
+	}
+	msg := tgbotapi.NewMessage(chatID, "Choose chain:")
+	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(rows...)
+	_, _ = bot.Send(msg)
+}
+
+func (h *Handler) sendCoinPicker(bot *tgbotapi.BotAPI, chatID int64) {
+	rows := make([][]tgbotapi.InlineKeyboardButton, 0, len(supportedBaseCoins))
+	for _, c := range supportedBaseCoins {
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("🪙 "+c, "wallet_coin:"+c),
+		))
+	}
+	msg := tgbotapi.NewMessage(chatID, "Choose base coin:")
+	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(rows...)
+	_, _ = bot.Send(msg)
+}
+
+func (h *Handler) sendTokenPicker(bot *tgbotapi.BotAPI, chatID int64, st *walletCreateState) {
+	common := []string{"USDT", "USDC", "WETH", "WBTC", "LINK", "PEPE"}
+	selected := map[string]bool{}
+	for _, t := range st.Tokens {
+		selected[t] = true
+	}
+	rows := make([][]tgbotapi.InlineKeyboardButton, 0, len(common)+2)
+	for _, t := range common {
+		label := "⚪ " + t
+		if selected[t] {
+			label = "🟢 " + t
+		}
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData(label, "wallet_tok_toggle:"+t),
+		))
+	}
+	rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+		tgbotapi.NewInlineKeyboardButtonData("✍️ Add Custom Tokens", "wallet_tok_custom"),
+	))
+	rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+		tgbotapi.NewInlineKeyboardButtonData("✅ Done", "wallet_tok_done"),
+		tgbotapi.NewInlineKeyboardButtonData("⏭ Skip", "wallet_tok_skip"),
+	))
+	msg := tgbotapi.NewMessage(chatID, "Choose tokens to track:")
+	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(rows...)
+	_, _ = bot.Send(msg)
+}
+
+func (h *Handler) toggleToken(st *walletCreateState, token string) {
+	token = strings.ToUpper(strings.TrimSpace(token))
+	if token == "" {
+		return
+	}
+	next := make([]string, 0, len(st.Tokens))
+	found := false
+	for _, t := range st.Tokens {
+		if t == token {
+			found = true
+			continue
+		}
+		next = append(next, t)
+	}
+	if !found {
+		next = append(next, token)
+	}
+	st.Tokens = next
+}
+
+func (h *Handler) getWalletState(chatID int64) (*walletCreateState, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	st, ok := h.states[chatID]
+	return st, ok
+}
+
+func (h *Handler) clearWalletState(chatID int64) {
+	h.mu.Lock()
+	delete(h.states, chatID)
+	h.mu.Unlock()
 }
 
 func (h *Handler) handleWalletRemovalInput(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) bool {
@@ -283,6 +376,67 @@ func (h *Handler) handleCallback(ctx context.Context, bot *tgbotapi.BotAPI, cb *
 	data := cb.Data
 	h.audit(ctx, u, "callback", data)
 	switch {
+	case strings.HasPrefix(data, "wallet_chain:"):
+		st, ok := h.getWalletState(chatID)
+		if !ok || st.Step < 3 {
+			h.sendText(bot, chatID, "ℹ️ Start with Add Wallet first.")
+			break
+		}
+		chain := strings.TrimPrefix(data, "wallet_chain:")
+		if !isSupported(supportedChains, chain) {
+			h.sendText(bot, chatID, "❌ Unsupported chain.")
+			break
+		}
+		st.Chain = chain
+		st.Step = 4
+		h.sendCoinPicker(bot, chatID)
+	case strings.HasPrefix(data, "wallet_coin:"):
+		st, ok := h.getWalletState(chatID)
+		if !ok || st.Step < 4 {
+			h.sendText(bot, chatID, "ℹ️ Choose chain first.")
+			break
+		}
+		coin := strings.TrimPrefix(data, "wallet_coin:")
+		if !isSupported(supportedBaseCoins, coin) {
+			h.sendText(bot, chatID, "❌ Unsupported base coin.")
+			break
+		}
+		st.Coin = coin
+		st.Step = 5
+		h.sendTokenPicker(bot, chatID, st)
+	case strings.HasPrefix(data, "wallet_tok_toggle:"):
+		st, ok := h.getWalletState(chatID)
+		if !ok || st.Step < 5 {
+			h.sendText(bot, chatID, "ℹ️ Start with Add Wallet first.")
+			break
+		}
+		token := strings.TrimPrefix(data, "wallet_tok_toggle:")
+		h.toggleToken(st, token)
+		h.sendTokenPicker(bot, chatID, st)
+	case data == "wallet_tok_custom":
+		st, ok := h.getWalletState(chatID)
+		if !ok || st.Step < 5 {
+			h.sendText(bot, chatID, "ℹ️ Start with Add Wallet first.")
+			break
+		}
+		st.CustomTokenMode = true
+		h.sendText(bot, chatID, "✍️ Send custom tokens as CSV (example: TOKEN1,TOKEN2).")
+	case data == "wallet_tok_skip":
+		st, ok := h.getWalletState(chatID)
+		if !ok {
+			h.sendText(bot, chatID, "ℹ️ No active wallet setup.")
+			break
+		}
+		h.finishWalletCreate(ctx, bot, chatID, u.ID, st)
+		h.clearWalletState(chatID)
+	case data == "wallet_tok_done":
+		st, ok := h.getWalletState(chatID)
+		if !ok {
+			h.sendText(bot, chatID, "ℹ️ No active wallet setup.")
+			break
+		}
+		h.finishWalletCreate(ctx, bot, chatID, u.ID, st)
+		h.clearWalletState(chatID)
 	case strings.HasPrefix(data, "admin_users_page:"):
 		if u.Role != models.RoleSuperUser {
 			h.sendText(bot, chatID, "⛔ Superuser only.")
@@ -330,10 +484,9 @@ func (h *Handler) handleCallback(ctx context.Context, bot *tgbotapi.BotAPI, cb *
 			h.sendText(bot, chatID, fmt.Sprintf("✅ Removed %d wallet(s) named `%s`.", count, rs.Name))
 		}
 	case data == "wallet_cancel":
-		h.mu.Lock()
-		_, exists := h.states[chatID]
-		delete(h.states, chatID)
-		h.mu.Unlock()
+		st, exists := h.getWalletState(chatID)
+		_ = st
+		h.clearWalletState(chatID)
 		if exists {
 			h.log.Printf("wallet wizard cancelled via button chat_id=%d user_id=%s", chatID, u.ID)
 			h.sendText(bot, chatID, "🛑 Wallet setup canceled.")

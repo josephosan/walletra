@@ -33,6 +33,9 @@ func (s *TrackerService) PollOnce(ctx context.Context) {
 		since := now.Add(-1 * time.Hour)
 		if w.LastPolledAt != nil {
 			since = *w.LastPolledAt
+		} else {
+			// New wallets: bootstrap with one month of history.
+			since = now.AddDate(0, -1, 0)
 		}
 		filters, err := s.repo.GetWalletTokens(ctx, w.ID)
 		if err != nil {
