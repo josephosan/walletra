@@ -15,7 +15,7 @@ type Config struct {
 	SuperUserTelegram  int64
 	DatabaseURL        string
 	PollIntervalMinute int
-	CovalentAPIKey     string
+	ExplorerAPIKey     string
 }
 
 func Load() (Config, error) {
@@ -38,7 +38,7 @@ func Load() (Config, error) {
 		SuperUserTelegram:  superUser,
 		DatabaseURL:        os.Getenv("DATABASE_URL"),
 		PollIntervalMinute: pollMins,
-		CovalentAPIKey:     os.Getenv("COVALENT_API_KEY"),
+		ExplorerAPIKey:     os.Getenv("EXPLORER_API_KEY"),
 	}
 
 	if cfg.TelegramBotToken == "" {

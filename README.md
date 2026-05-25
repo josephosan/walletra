@@ -22,7 +22,7 @@ Telegram bot to track wallet transactions and generate hourly/daily/monthly/year
 - Go
 - PostgreSQL
 - Telegram Bot API
-- Covalent/GoldRush API (optional, via `COVALENT_API_KEY`)
+- Direct chain queries (no Covalent dependency)
 
 ## Quick Start
 
@@ -31,7 +31,7 @@ Telegram bot to track wallet transactions and generate hourly/daily/monthly/year
 2. Fill:
    - `TELEGRAM_BOT_TOKEN`
    - `SUPERUSER_TELEGRAM_ID`
-   - optional `COVALENT_API_KEY`
+   - optional `EXPLORER_API_KEY` (for EVM explorer rate limits)
 3. Run:
    - `docker compose up --build`
 
@@ -39,8 +39,8 @@ Telegram bot to track wallet transactions and generate hourly/daily/monthly/year
 
 - In Docker runtime (including Railway), container startup runs all SQL files in `/app/migrations` before launching the bot.
 - In local `docker-compose`, Postgres also runs init SQL on first fresh volume via `docker-entrypoint-initdb.d`.
-- If `COVALENT_API_KEY` is empty, polling runs but does not ingest transactions.
-- Chain names should match Covalent format like `eth-mainnet`, `bsc-mainnet`, `base-mainnet`.
+- Supported chains: `btc-mainnet`, `eth-mainnet`, `matic-mainnet`, `solana-mainnet`, `ton-mainnet`.
+- On startup, bot validates provider health and exits if any supported chain provider is down.
 
 ## Bot UX
 

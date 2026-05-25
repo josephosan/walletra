@@ -78,7 +78,15 @@ func main() {
 		}
 	}
 	reportSvc := service.NewReportService(r)
-	provider := tracker.NewCovalentProvider(cfg.CovalentAPIKey)
+	provider := tracker.NewMultiChainProvider(
+		tracker.NewEVMExplorerProvider(cfg.ExplorerAPIKey),
+		tracker.NewBTCProvider(),
+		tracker.NewSolanaProvider(),
+		tracker.NewTONProvider(),
+	)
+	if err := provider.ValidateAll(ctx); err != nil {
+		l.Fatalf("provider health-check failed: %v", err)
+	}
 	trackerSvc := service.NewTrackerService(r, provider, l)
 	handler := bot.NewHandler(l, r, reportSvc, cfg.SuperUserTelegram)
 	s := scheduler.New(l, r, trackerSvc, reportSvc, telegramBot)

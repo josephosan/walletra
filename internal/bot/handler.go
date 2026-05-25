@@ -46,13 +46,7 @@ var supportedChains = []string{
 	"solana-mainnet",
 	"ton-mainnet",
 	"eth-mainnet",
-	"bsc-mainnet",
-	"base-mainnet",
 	"matic-mainnet",
-	"arbitrum-mainnet",
-	"optimism-mainnet",
-	"avalanche-mainnet",
-	"fantom-mainnet",
 }
 
 var supportedBaseCoins = []string{
@@ -60,13 +54,7 @@ var supportedBaseCoins = []string{
 	"SOL",
 	"TON",
 	"ETH",
-	"BNB",
-	"BASE",
 	"MATIC",
-	"ARB",
-	"OP",
-	"AVAX",
-	"FTM",
 }
 
 func NewHandler(log *log.Logger, repo *repo.Repository, report *service.ReportService, superUserID int64) *Handler {
