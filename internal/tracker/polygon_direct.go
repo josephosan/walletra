@@ -17,6 +17,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/ethereum/go-ethereum/rpc"
 )
 
 var transferTopic = crypto.Keccak256Hash([]byte("Transfer(address,address,uint256)"))
@@ -24,6 +25,7 @@ var transferTopic = crypto.Keccak256Hash([]byte("Transfer(address,address,uint25
 type PolygonDirectProvider struct {
 	repo          *repo.Repository
 	client        *ethclient.Client
+	rpcClient     *rpc.Client
 	rpcURL        string
 	startBlock    int64
 	confirmations int64
@@ -42,13 +44,17 @@ func NewPolygonDirectProvider(r *repo.Repository, cfg PolygonDirectConfig) (*Pol
 	if err != nil {
 		return nil, fmt.Errorf("dial polygon rpc: %w", err)
 	}
+	rpcClient, err := rpc.Dial(cfg.RPCURL)
+	if err != nil {
+		return nil, fmt.Errorf("dial polygon rpc raw client: %w", err)
+	}
 	if cfg.Confirmations <= 0 {
 		cfg.Confirmations = 20
 	}
 	if cfg.ChunkSize <= 0 {
 		cfg.ChunkSize = 500
 	}
-	return &PolygonDirectProvider{repo: r, client: client, rpcURL: cfg.RPCURL, startBlock: cfg.StartBlock, confirmations: cfg.Confirmations, chunkSize: cfg.ChunkSize}, nil
+	return &PolygonDirectProvider{repo: r, client: client, rpcClient: rpcClient, rpcURL: cfg.RPCURL, startBlock: cfg.StartBlock, confirmations: cfg.Confirmations, chunkSize: cfg.ChunkSize}, nil
 }
 
 func (p *PolygonDirectProvider) Name() string                    { return "polygon-direct-rpc" }
@@ -179,51 +185,44 @@ func (p *PolygonDirectProvider) scanRange(
 	out := make([]models.WalletTransaction, 0)
 	lastBlockHash := ""
 
-	chainID, err := p.client.ChainID(ctx)
-	if err != nil {
-		return nil, "", fmt.Errorf("get chain id: %w", err)
-	}
 	for bn := from; bn <= to; bn++ {
-		block, err := p.client.BlockByNumber(ctx, big.NewInt(bn))
+		block, err := p.getRawBlock(ctx, bn)
 		if err != nil {
 			return nil, "", fmt.Errorf("load block %d: %w", bn, err)
 		}
-		lastBlockHash = block.Hash().Hex()
-		bt := time.Unix(int64(block.Time()), 0).UTC()
+		lastBlockHash = block.Hash
+		bt := time.Unix(block.Timestamp, 0).UTC()
 		if bt.Before(since) {
 			continue
 		}
-		signer := types.LatestSignerForChainID(chainID)
-		for txIdx, tx := range block.Transactions() {
-			toAddr := tx.To()
-			if toAddr == nil {
+		for txIdx, tx := range block.Transactions {
+			if tx.To == "" {
 				continue
 			}
-			fromAddr, err := types.Sender(signer, tx)
-			if err != nil {
-				continue
-			}
-			if fromAddr != walletAddr && *toAddr != walletAddr {
+			fromAddr := strings.ToLower(tx.From)
+			toAddr := strings.ToLower(tx.To)
+			wAddr := strings.ToLower(walletAddr.Hex())
+			if fromAddr != wAddr && toAddr != wAddr {
 				continue
 			}
 			direction := "unknown"
-			if *toAddr == walletAddr {
+			if toAddr == wAddr {
 				direction = "transfer_in"
-			} else if fromAddr == walletAddr {
+			} else if fromAddr == wAddr {
 				direction = "transfer_out"
 			}
-			amount := weiToMatic(tx.Value())
+			amount := hexWeiToMatic(tx.Value)
 			raw := map[string]any{
 				"block_number": bn,
-				"block_hash":   block.Hash().Hex(),
+				"block_hash":   block.Hash,
 				"tx_index":     txIdx,
-				"gas":          tx.Gas(),
-				"gas_price":    tx.GasPrice().String(),
-				"nonce":        tx.Nonce(),
-				"from":         fromAddr.Hex(),
-				"to":           toAddr.Hex(),
+				"gas":          tx.Gas,
+				"gas_price":    tx.GasPrice,
+				"nonce":        tx.Nonce,
+				"from":         tx.From,
+				"to":           tx.To,
 			}
-			out = append(out, models.WalletTransaction{WalletID: wallet.ID, TxHash: tx.Hash().Hex(), Chain: wallet.Chain, TokenSymbol: "MATIC", Direction: direction, Amount: amount, Timestamp: bt, RawPayload: repo.EncodePayload(raw)})
+			out = append(out, models.WalletTransaction{WalletID: wallet.ID, TxHash: tx.Hash, Chain: wallet.Chain, TokenSymbol: "MATIC", Direction: direction, Amount: amount, Timestamp: bt, RawPayload: repo.EncodePayload(raw)})
 		}
 	}
 	log.Printf("[polygon-direct] wallet=%s range=%d-%d native_transfers=%d", wallet.Address, from, to, len(out))
@@ -334,3 +333,58 @@ func weiToMatic(v *big.Int) float64 {
 }
 
 func tokenAmountAssume18(v *big.Int) float64 { return weiToMatic(v) }
+
+type rpcBlock struct {
+	Hash         string  `json:"hash"`
+	TimestampHex string  `json:"timestamp"`
+	Transactions []rpcTx `json:"transactions"`
+	Timestamp    int64   `json:"-"`
+}
+
+type rpcTx struct {
+	Hash     string `json:"hash"`
+	From     string `json:"from"`
+	To       string `json:"to"`
+	Value    string `json:"value"`
+	Gas      string `json:"gas"`
+	GasPrice string `json:"gasPrice"`
+	Nonce    string `json:"nonce"`
+}
+
+func (p *PolygonDirectProvider) getRawBlock(ctx context.Context, blockNum int64) (rpcBlock, error) {
+	var out rpcBlock
+	tag := fmt.Sprintf("0x%x", blockNum)
+	if err := p.rpcClient.CallContext(ctx, &out, "eth_getBlockByNumber", tag, true); err != nil {
+		return out, fmt.Errorf("eth_getBlockByNumber: %w", err)
+	}
+	ts, err := parseHexInt64(out.TimestampHex)
+	if err != nil {
+		return out, fmt.Errorf("parse block timestamp: %w", err)
+	}
+	out.Timestamp = ts
+	return out, nil
+}
+
+func parseHexInt64(h string) (int64, error) {
+	x := strings.TrimPrefix(strings.TrimSpace(h), "0x")
+	if x == "" {
+		return 0, nil
+	}
+	v := new(big.Int)
+	if _, ok := v.SetString(x, 16); !ok {
+		return 0, fmt.Errorf("invalid hex int: %s", h)
+	}
+	return v.Int64(), nil
+}
+
+func hexWeiToMatic(h string) float64 {
+	x := strings.TrimPrefix(strings.TrimSpace(h), "0x")
+	if x == "" {
+		return 0
+	}
+	v := new(big.Int)
+	if _, ok := v.SetString(x, 16); !ok {
+		return 0
+	}
+	return weiToMatic(v)
+}
