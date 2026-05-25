@@ -267,6 +267,39 @@ func (h *Handler) sendTokenPicker(bot *tgbotapi.BotAPI, chatID int64, st *wallet
 	_, _ = bot.Send(msg)
 }
 
+func (h *Handler) updateTokenPickerMessage(bot *tgbotapi.BotAPI, chatID int64, messageID int, st *walletCreateState) {
+	common := []string{"USDT", "USDC", "WETH", "WBTC", "LINK", "PEPE"}
+	selected := map[string]bool{}
+	for _, t := range st.Tokens {
+		selected[t] = true
+	}
+	rows := make([][]tgbotapi.InlineKeyboardButton, 0, len(common)+2)
+	for _, t := range common {
+		label := "⚪ " + t
+		if selected[t] {
+			label = "🟢 " + t
+		}
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData(label, "wallet_tok_toggle:"+t),
+		))
+	}
+	rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+		tgbotapi.NewInlineKeyboardButtonData("✍️ Add Custom Tokens", "wallet_tok_custom"),
+	))
+	rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+		tgbotapi.NewInlineKeyboardButtonData("✅ Done", "wallet_tok_done"),
+		tgbotapi.NewInlineKeyboardButtonData("⏭ Skip", "wallet_tok_skip"),
+	))
+	kb := tgbotapi.NewInlineKeyboardMarkup(rows...)
+	edit := tgbotapi.NewEditMessageText(chatID, messageID, "Choose tokens to track:")
+	edit.ReplyMarkup = &kb
+	if _, err := bot.Send(edit); err != nil {
+		msg := tgbotapi.NewMessage(chatID, "Choose tokens to track:")
+		msg.ReplyMarkup = kb
+		_, _ = bot.Send(msg)
+	}
+}
+
 func (h *Handler) toggleToken(st *walletCreateState, token string) {
 	token = strings.ToUpper(strings.TrimSpace(token))
 	if token == "" {
@@ -412,7 +445,9 @@ func (h *Handler) handleCallback(ctx context.Context, bot *tgbotapi.BotAPI, cb *
 		}
 		token := strings.TrimPrefix(data, "wallet_tok_toggle:")
 		h.toggleToken(st, token)
-		h.sendTokenPicker(bot, chatID, st)
+		h.updateTokenPickerMessage(bot, chatID, cb.Message.MessageID, st)
+		_, _ = bot.Request(tgbotapi.NewCallback(cb.ID, "Updated"))
+		return
 	case data == "wallet_tok_custom":
 		st, ok := h.getWalletState(chatID)
 		if !ok || st.Step < 5 {

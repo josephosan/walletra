@@ -79,6 +79,7 @@ func main() {
 	}
 	reportSvc := service.NewReportService(r)
 	var provider *tracker.MultiChainProvider
+	startupHealthy := true
 	if !cfg.PolygonDirectProviderEnabled {
 		l.Printf("POLYGON_DIRECT_PROVIDER_ENABLED is false; forcing direct provider mode because explorer providers were removed")
 	}
@@ -96,6 +97,7 @@ func main() {
 	}
 	provider = tracker.NewMultiChainProvider(polyDirect)
 	if err := provider.ValidateAll(ctx); err != nil {
+		startupHealthy = false
 		l.Printf("provider health-check failed (continuing in degraded mode): %v", err)
 		if cfg.SuperUserTelegram > 0 {
 			msg := tgbotapi.NewMessage(
@@ -111,6 +113,15 @@ func main() {
 	handler := bot.NewHandler(l, r, reportSvc, cfg.SuperUserTelegram)
 	s := scheduler.New(l, r, trackerSvc, reportSvc, telegramBot)
 	s.Start(ctx, time.Duration(cfg.PollIntervalMinute)*time.Minute)
+	if startupHealthy && cfg.SuperUserTelegram > 0 {
+		msg := tgbotapi.NewMessage(
+			cfg.SuperUserTelegram,
+			"✅ Walletra started successfully.\n\nAll startup checks passed.",
+		)
+		if _, err := telegramBot.Send(msg); err != nil {
+			l.Printf("failed to notify superuser about successful startup: %v", err)
+		}
+	}
 
 	trackerSvc.PollOnce(ctx)
 
