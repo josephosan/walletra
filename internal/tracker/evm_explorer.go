@@ -34,9 +34,9 @@ func (p *EVMExplorerProvider) HealthCheck(ctx context.Context) error {
 }
 
 type evmResponse struct {
-	Status  string        `json:"status"`
-	Message string        `json:"message"`
-	Result  []evmTransfer `json:"result"`
+	Status  string          `json:"status"`
+	Message string          `json:"message"`
+	Result  json.RawMessage `json:"result"`
 }
 type evmTransfer struct {
 	Hash            string `json:"hash"`
@@ -130,10 +130,31 @@ func (p *EVMExplorerProvider) fetchTokenTransfers(ctx context.Context, chain, ad
 	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
 		return nil, err
 	}
-	if payload.Status == "0" && strings.Contains(strings.ToLower(payload.Message), "no transactions") {
-		return []evmTransfer{}, nil
+
+	var list []evmTransfer
+	if err := json.Unmarshal(payload.Result, &list); err == nil {
+		if payload.Status == "0" && strings.Contains(strings.ToLower(payload.Message), "no transactions") {
+			return []evmTransfer{}, nil
+		}
+		return list, nil
 	}
-	return payload.Result, nil
+
+	var resultStr string
+	if err := json.Unmarshal(payload.Result, &resultStr); err == nil {
+		msg := strings.TrimSpace(resultStr)
+		if msg == "" {
+			msg = strings.TrimSpace(payload.Message)
+		}
+		if strings.Contains(strings.ToLower(msg), "no transactions") {
+			return []evmTransfer{}, nil
+		}
+		if msg == "" {
+			msg = "unknown explorer error"
+		}
+		return nil, fmt.Errorf("evm explorer error: %s", msg)
+	}
+
+	return nil, fmt.Errorf("unexpected explorer result format: status=%s message=%s", payload.Status, payload.Message)
 }
 
 func parseAmount(v, d string) float64 {
