@@ -120,42 +120,21 @@ func (p *PolygonDirectProvider) FetchWalletTransactions(ctx context.Context, wal
 	return out, nil
 }
 
-func (p *PolygonDirectProvider) resolveStartBlock(ctx context.Context, wallet models.Wallet, since time.Time) (int64, error) {
-	// New wallet bootstrap: backfill from nearest block around `since`.
-	if wallet.LastPolledAt == nil {
-		latest, err := p.client.BlockNumber(ctx)
-		if err != nil {
-			return 0, fmt.Errorf("latest block for bootstrap: %w", err)
-		}
-		start, err := p.findBlockByTimestamp(ctx, since.Unix(), p.startBlock, int64(latest))
-		if err != nil {
-			return 0, fmt.Errorf("bootstrap block by timestamp: %w", err)
-		}
-		if start < p.startBlock {
-			start = p.startBlock
-		}
-		return start, nil
+func (p *PolygonDirectProvider) resolveStartBlock(ctx context.Context, _ models.Wallet, since time.Time) (int64, error) {
+	// Per-wallet scanning must use wallet-local time window; a single chain-wide
+	// cursor can skip history for newly added wallets.
+	latest, err := p.client.BlockNumber(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("latest block for start resolution: %w", err)
 	}
-
-	state, err := p.repo.GetPolygonIndexerState(ctx, "matic-mainnet")
-	if err == nil {
-		// Reorg safety check: verify stored block hash still matches chain.
-		if state.LastIndexedBlock > 0 && state.LastBlockHash != "" {
-			b, berr := p.client.BlockByNumber(ctx, big.NewInt(state.LastIndexedBlock))
-			if berr == nil && !strings.EqualFold(b.Hash().Hex(), state.LastBlockHash) {
-				rewind := state.LastIndexedBlock - p.confirmations
-				if rewind < p.startBlock {
-					rewind = p.startBlock
-				}
-				return rewind, nil
-			}
-		}
-		return state.LastIndexedBlock + 1, nil
+	start, err := p.findBlockByTimestamp(ctx, since.Unix(), p.startBlock, int64(latest))
+	if err != nil {
+		return 0, fmt.Errorf("block by timestamp: %w", err)
 	}
-	if !repo.IsNotFound(err) {
-		return 0, fmt.Errorf("read polygon indexer state: %w", err)
+	if start < p.startBlock {
+		start = p.startBlock
 	}
-	return p.startBlock, nil
+	return start, nil
 }
 
 func (p *PolygonDirectProvider) findBlockByTimestamp(ctx context.Context, targetTS, low, high int64) (int64, error) {
