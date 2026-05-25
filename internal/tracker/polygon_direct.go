@@ -109,6 +109,17 @@ func (p *PolygonDirectProvider) FetchWalletTransactions(ctx context.Context, wal
 	}
 
 	out := make([]models.WalletTransaction, 0)
+
+	// First-time wallet bootstrap: fetch latest 10 transactions only.
+	if wallet.LastPolledAt == nil {
+		boot, err := p.fetchLatestTen(ctx, wallet, walletAddr, safeTo, filterContracts, filterSymbols)
+		if err != nil {
+			return nil, err
+		}
+		log.Printf("[polygon-direct] wallet=%s bootstrap_latest=%d", wallet.Address, len(boot))
+		return boot, nil
+	}
+
 	current := start
 	for current <= safeTo {
 		to := current + p.chunkSize - 1
@@ -129,6 +140,46 @@ func (p *PolygonDirectProvider) FetchWalletTransactions(ctx context.Context, wal
 	}
 
 	log.Printf("[polygon-direct] wallet=%s total_fetched=%d", wallet.Address, len(out))
+	return out, nil
+}
+
+func (p *PolygonDirectProvider) fetchLatestTen(
+	ctx context.Context,
+	wallet models.Wallet,
+	walletAddr common.Address,
+	safeTo int64,
+	filterContracts map[common.Address]bool,
+	filterSymbols map[string]bool,
+) ([]models.WalletTransaction, error) {
+	const target = 10
+	out := make([]models.WalletTransaction, 0, target)
+	seen := map[string]bool{}
+	lowerBound := p.startBlock
+	currentTo := safeTo
+
+	for currentTo >= lowerBound && len(out) < target {
+		from := currentTo - p.chunkSize + 1
+		if from < lowerBound {
+			from = lowerBound
+		}
+		chunk, _, err := p.scanRange(ctx, wallet, walletAddr, time.Unix(0, 0).UTC(), from, currentTo, filterContracts, filterSymbols)
+		if err != nil {
+			return nil, err
+		}
+		for i := len(chunk) - 1; i >= 0 && len(out) < target; i-- {
+			tx := chunk[i]
+			key := tx.TxHash + "|" + tx.TokenAddress + "|" + tx.Direction
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			out = append(out, tx)
+		}
+		if from == lowerBound {
+			break
+		}
+		currentTo = from - 1
+	}
 	return out, nil
 }
 
@@ -252,11 +303,38 @@ func (p *PolygonDirectProvider) getTransferLogs(ctx context.Context, wallet comm
 		topics[1] = []common.Hash{common.BytesToHash(wallet.Bytes())}
 	}
 	q := ethereum.FilterQuery{FromBlock: big.NewInt(from), ToBlock: big.NewInt(to), Topics: topics}
+	return p.filterLogsChunked(ctx, q, from, to)
+}
+
+func (p *PolygonDirectProvider) filterLogsChunked(ctx context.Context, q ethereum.FilterQuery, from, to int64) ([]types.Log, error) {
 	logs, err := p.client.FilterLogs(ctx, q)
-	if err != nil {
+	if err == nil {
+		return logs, nil
+	}
+	msg := strings.ToLower(err.Error())
+	if !(strings.Contains(msg, "block range is too large") || strings.Contains(msg, "response size exceeded")) {
 		return nil, fmt.Errorf("filter logs %d-%d: %w", from, to, err)
 	}
-	return logs, nil
+	if from >= to {
+		return nil, fmt.Errorf("filter logs %d-%d failed and cannot split further: %w", from, to, err)
+	}
+	mid := (from + to) / 2
+	leftQ := q
+	rightQ := q
+	leftQ.FromBlock = big.NewInt(from)
+	leftQ.ToBlock = big.NewInt(mid)
+	rightQ.FromBlock = big.NewInt(mid + 1)
+	rightQ.ToBlock = big.NewInt(to)
+
+	left, lerr := p.filterLogsChunked(ctx, leftQ, from, mid)
+	if lerr != nil {
+		return nil, lerr
+	}
+	right, rerr := p.filterLogsChunked(ctx, rightQ, mid+1, to)
+	if rerr != nil {
+		return nil, rerr
+	}
+	return append(left, right...), nil
 }
 
 func (p *PolygonDirectProvider) normalizeLogs(

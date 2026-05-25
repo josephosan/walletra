@@ -10,13 +10,14 @@ import (
 )
 
 type TrackerService struct {
-	repo     *repo.Repository
-	provider tracker.TransactionProvider
-	log      *log.Logger
+	repo       *repo.Repository
+	provider   tracker.TransactionProvider
+	log        *log.Logger
+	pollWindow time.Duration
 }
 
-func NewTrackerService(r *repo.Repository, p tracker.TransactionProvider, l *log.Logger) *TrackerService {
-	return &TrackerService{repo: r, provider: p, log: l}
+func NewTrackerService(r *repo.Repository, p tracker.TransactionProvider, l *log.Logger, pollWindow time.Duration) *TrackerService {
+	return &TrackerService{repo: r, provider: p, log: l, pollWindow: pollWindow}
 }
 
 func (s *TrackerService) PollOnce(ctx context.Context) {
@@ -30,12 +31,11 @@ func (s *TrackerService) PollOnce(ctx context.Context) {
 	totalFetched := 0
 	totalInserted := 0
 	for _, w := range wallets {
-		since := now.Add(-1 * time.Hour)
-		if w.LastPolledAt != nil {
+		// Regular polling window uses configured interval.
+		since := now.Add(-1 * s.pollWindow)
+		// For first-time wallets, provider handles bootstrap mode itself.
+		if w.LastPolledAt != nil && w.LastPolledAt.After(since) {
 			since = *w.LastPolledAt
-		} else {
-			// New wallets: bootstrap with one month of history.
-			since = now.AddDate(0, -1, 0)
 		}
 		s.log.Printf("poll wallet start wallet_id=%s name=%q chain=%s since=%s", w.ID, w.Name, w.Chain, since.Format(time.RFC3339))
 		filters, err := s.repo.GetWalletTokens(ctx, w.ID)

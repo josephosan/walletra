@@ -109,7 +109,7 @@ func main() {
 			}
 		}
 	}
-	trackerSvc := service.NewTrackerService(r, provider, l)
+	trackerSvc := service.NewTrackerService(r, provider, l, time.Duration(cfg.PollIntervalMinute)*time.Minute)
 	handler := bot.NewHandler(l, r, reportSvc, cfg.SuperUserTelegram)
 	s := scheduler.New(l, r, trackerSvc, reportSvc, telegramBot)
 	s.Start(ctx, time.Duration(cfg.PollIntervalMinute)*time.Minute)
