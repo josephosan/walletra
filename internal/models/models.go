@@ -77,3 +77,14 @@ type UserActivity struct {
 	Details         string
 	CreatedAt       time.Time
 }
+
+type WalletTokenFilter struct {
+	TokenSymbol  string
+	TokenAddress string
+}
+
+type PolygonIndexerState struct {
+	Chain            string
+	LastIndexedBlock int64
+	LastBlockHash    string
+}

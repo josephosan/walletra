@@ -4,10 +4,6 @@ import "testing"
 
 func TestSupportedChains_ExpectedSet(t *testing.T) {
 	expected := []string{
-		"btc-mainnet",
-		"solana-mainnet",
-		"ton-mainnet",
-		"eth-mainnet",
 		"matic-mainnet",
 	}
 
@@ -24,10 +20,6 @@ func TestSupportedChains_ExpectedSet(t *testing.T) {
 
 func TestSupportedBaseCoins_ExpectedSet(t *testing.T) {
 	expected := []string{
-		"BTC",
-		"SOL",
-		"TON",
-		"ETH",
 		"MATIC",
 	}
 
@@ -44,11 +36,7 @@ func TestSupportedBaseCoins_ExpectedSet(t *testing.T) {
 
 func TestChainCoinCoveragePairs(t *testing.T) {
 	pairs := map[string]string{
-		"btc-mainnet":      "BTC",
-		"solana-mainnet":   "SOL",
-		"ton-mainnet":      "TON",
-		"eth-mainnet":      "ETH",
-		"matic-mainnet":    "MATIC",
+		"matic-mainnet": "MATIC",
 	}
 
 	for chain, coin := range pairs {

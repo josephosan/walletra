@@ -22,7 +22,7 @@ Telegram bot to track wallet transactions and generate hourly/daily/monthly/year
 - Go
 - PostgreSQL
 - Telegram Bot API
-- Direct chain queries (no Covalent dependency)
+- Direct Polygon RPC queries (no explorer/indexer dependency)
 
 ## Quick Start
 
@@ -31,7 +31,8 @@ Telegram bot to track wallet transactions and generate hourly/daily/monthly/year
 2. Fill:
    - `TELEGRAM_BOT_TOKEN`
    - `SUPERUSER_TELEGRAM_ID`
-   - optional `EXPLORER_API_KEY` (for EVM explorer rate limits)
+   - `POLYGON_DIRECT_PROVIDER_ENABLED=true`
+   - `POLYGON_RPC_URL`
 3. Run:
    - `docker compose up --build`
 
@@ -39,8 +40,8 @@ Telegram bot to track wallet transactions and generate hourly/daily/monthly/year
 
 - In Docker runtime (including Railway), container startup applies SQL files in `/app/migrations` once and tracks them in `schema_migrations`.
 - In local `docker-compose`, Postgres also runs init SQL on first fresh volume via `docker-entrypoint-initdb.d`.
-- Supported chains: `btc-mainnet`, `eth-mainnet`, `matic-mainnet`, `solana-mainnet`, `ton-mainnet`.
-- On startup, bot validates provider health and exits if any supported chain provider is down.
+- Supported chain: `matic-mainnet` only.
+- On startup, bot validates Polygon provider health and exits if Polygon RPC is unavailable.
 
 ## Bot UX
 

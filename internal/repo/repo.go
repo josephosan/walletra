@@ -241,6 +241,40 @@ func (r *Repository) GetWalletTokens(ctx context.Context, walletID string) ([]st
 	return out, rows.Err()
 }
 
+func (r *Repository) GetWalletTokenFilters(ctx context.Context, walletID string) ([]models.WalletTokenFilter, error) {
+	rows, err := r.db.Query(ctx, `SELECT token_symbol, COALESCE(token_address, '') FROM wallet_token_filters WHERE wallet_id=$1`, walletID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]models.WalletTokenFilter, 0)
+	for rows.Next() {
+		var f models.WalletTokenFilter
+		if err := rows.Scan(&f.TokenSymbol, &f.TokenAddress); err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+func (r *Repository) GetPolygonIndexerState(ctx context.Context, chain string) (models.PolygonIndexerState, error) {
+	var s models.PolygonIndexerState
+	err := r.db.QueryRow(ctx, `SELECT chain, last_indexed_block, COALESCE(last_block_hash,'') FROM polygon_indexer_state WHERE chain=$1`, chain).
+		Scan(&s.Chain, &s.LastIndexedBlock, &s.LastBlockHash)
+	return s, err
+}
+
+func (r *Repository) UpsertPolygonIndexerState(ctx context.Context, chain string, lastBlock int64, blockHash string) error {
+	_, err := r.db.Exec(ctx, `
+INSERT INTO polygon_indexer_state(chain, last_indexed_block, last_block_hash)
+VALUES ($1,$2,$3)
+ON CONFLICT (chain)
+DO UPDATE SET last_indexed_block=EXCLUDED.last_indexed_block, last_block_hash=EXCLUDED.last_block_hash, updated_at=NOW()`,
+		chain, lastBlock, blockHash)
+	return err
+}
+
 func (r *Repository) InsertWalletTransactions(ctx context.Context, txs []models.WalletTransaction) error {
 	for _, t := range txs {
 		_, err := r.db.Exec(ctx, `
