@@ -53,6 +53,11 @@ var supportedBaseCoins = []string{
 	"BTC",
 }
 
+var chainBaseCoinMap = map[string]string{
+	"matic-mainnet": "MATIC",
+	"btc-mainnet":   "BTC",
+}
+
 func NewHandler(log *log.Logger, repo *repo.Repository, report *service.ReportService, superUserID int64) *Handler {
 	return &Handler{
 		log:     log,
@@ -229,9 +234,15 @@ func (h *Handler) sendChainPicker(bot *tgbotapi.BotAPI, chatID int64) {
 	_, _ = bot.Send(msg)
 }
 
-func (h *Handler) sendCoinPicker(bot *tgbotapi.BotAPI, chatID int64) {
-	rows := make([][]tgbotapi.InlineKeyboardButton, 0, len(supportedBaseCoins))
-	for _, c := range supportedBaseCoins {
+func (h *Handler) sendCoinPicker(bot *tgbotapi.BotAPI, chatID int64, chain string) {
+	coins := make([]string, 0, 1)
+	if mapped, ok := chainBaseCoinMap[chain]; ok {
+		coins = append(coins, mapped)
+	} else {
+		coins = append(coins, supportedBaseCoins...)
+	}
+	rows := make([][]tgbotapi.InlineKeyboardButton, 0, len(coins))
+	for _, c := range coins {
 		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("🪙 "+c, "wallet_coin:"+c),
 		))
@@ -242,7 +253,7 @@ func (h *Handler) sendCoinPicker(bot *tgbotapi.BotAPI, chatID int64) {
 }
 
 func (h *Handler) sendTokenPicker(bot *tgbotapi.BotAPI, chatID int64, st *walletCreateState) {
-	common := []string{"USDT", "USDC", "WETH", "WBTC", "LINK", "PEPE"}
+	common := tokenOptionsForChain(st.Chain)
 	selected := map[string]bool{}
 	for _, t := range st.Tokens {
 		selected[t] = true
@@ -257,9 +268,11 @@ func (h *Handler) sendTokenPicker(bot *tgbotapi.BotAPI, chatID int64, st *wallet
 			tgbotapi.NewInlineKeyboardButtonData(label, "wallet_tok_toggle:"+t),
 		))
 	}
-	rows = append(rows, tgbotapi.NewInlineKeyboardRow(
-		tgbotapi.NewInlineKeyboardButtonData("✍️ Add Custom Tokens", "wallet_tok_custom"),
-	))
+	if st.Chain != "btc-mainnet" {
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("✍️ Add Custom Tokens", "wallet_tok_custom"),
+		))
+	}
 	rows = append(rows, tgbotapi.NewInlineKeyboardRow(
 		tgbotapi.NewInlineKeyboardButtonData("✅ Done", "wallet_tok_done"),
 		tgbotapi.NewInlineKeyboardButtonData("⏭ Skip", "wallet_tok_skip"),
@@ -270,7 +283,7 @@ func (h *Handler) sendTokenPicker(bot *tgbotapi.BotAPI, chatID int64, st *wallet
 }
 
 func (h *Handler) updateTokenPickerMessage(bot *tgbotapi.BotAPI, chatID int64, messageID int, st *walletCreateState) {
-	common := []string{"USDT", "USDC", "WETH", "WBTC", "LINK", "PEPE"}
+	common := tokenOptionsForChain(st.Chain)
 	selected := map[string]bool{}
 	for _, t := range st.Tokens {
 		selected[t] = true
@@ -285,9 +298,11 @@ func (h *Handler) updateTokenPickerMessage(bot *tgbotapi.BotAPI, chatID int64, m
 			tgbotapi.NewInlineKeyboardButtonData(label, "wallet_tok_toggle:"+t),
 		))
 	}
-	rows = append(rows, tgbotapi.NewInlineKeyboardRow(
-		tgbotapi.NewInlineKeyboardButtonData("✍️ Add Custom Tokens", "wallet_tok_custom"),
-	))
+	if st.Chain != "btc-mainnet" {
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("✍️ Add Custom Tokens", "wallet_tok_custom"),
+		))
+	}
 	rows = append(rows, tgbotapi.NewInlineKeyboardRow(
 		tgbotapi.NewInlineKeyboardButtonData("✅ Done", "wallet_tok_done"),
 		tgbotapi.NewInlineKeyboardButtonData("⏭ Skip", "wallet_tok_skip"),
@@ -320,6 +335,17 @@ func (h *Handler) toggleToken(st *walletCreateState, token string) {
 		next = append(next, token)
 	}
 	st.Tokens = next
+}
+
+func tokenOptionsForChain(chain string) []string {
+	switch chain {
+	case "btc-mainnet":
+		return []string{"BTC"}
+	case "matic-mainnet":
+		return []string{"USDT", "USDC", "WETH", "WBTC", "LINK", "PEPE"}
+	default:
+		return []string{"USDT", "USDC", "WETH", "WBTC", "LINK", "PEPE"}
+	}
 }
 
 func (h *Handler) getWalletState(chatID int64) (*walletCreateState, bool) {
@@ -424,7 +450,7 @@ func (h *Handler) handleCallback(ctx context.Context, bot *tgbotapi.BotAPI, cb *
 		}
 		st.Chain = chain
 		st.Step = 4
-		h.sendCoinPicker(bot, chatID)
+		h.sendCoinPicker(bot, chatID, chain)
 	case strings.HasPrefix(data, "wallet_coin:"):
 		st, ok := h.getWalletState(chatID)
 		if !ok || st.Step < 4 {
@@ -434,6 +460,10 @@ func (h *Handler) handleCallback(ctx context.Context, bot *tgbotapi.BotAPI, cb *
 		coin := strings.TrimPrefix(data, "wallet_coin:")
 		if !isSupported(supportedBaseCoins, coin) {
 			h.sendText(bot, chatID, "❌ Unsupported base coin.")
+			break
+		}
+		if mapped, ok := chainBaseCoinMap[st.Chain]; ok && mapped != coin {
+			h.sendText(bot, chatID, fmt.Sprintf("❌ %s only supports base coin %s.", st.Chain, mapped))
 			break
 		}
 		st.Coin = coin
