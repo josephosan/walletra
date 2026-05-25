@@ -5,6 +5,7 @@ import "testing"
 func TestSupportedChains_ExpectedSet(t *testing.T) {
 	expected := []string{
 		"matic-mainnet",
+		"btc-mainnet",
 	}
 
 	assertNoDuplicates(t, supportedChains, "supportedChains")
@@ -21,6 +22,7 @@ func TestSupportedChains_ExpectedSet(t *testing.T) {
 func TestSupportedBaseCoins_ExpectedSet(t *testing.T) {
 	expected := []string{
 		"MATIC",
+		"BTC",
 	}
 
 	assertNoDuplicates(t, supportedBaseCoins, "supportedBaseCoins")
@@ -37,6 +39,7 @@ func TestSupportedBaseCoins_ExpectedSet(t *testing.T) {
 func TestChainCoinCoveragePairs(t *testing.T) {
 	pairs := map[string]string{
 		"matic-mainnet": "MATIC",
+		"btc-mainnet":   "BTC",
 	}
 
 	for chain, coin := range pairs {

@@ -45,10 +45,12 @@ type removeWalletState struct {
 
 var supportedChains = []string{
 	"matic-mainnet",
+	"btc-mainnet",
 }
 
 var supportedBaseCoins = []string{
 	"MATIC",
+	"BTC",
 }
 
 func NewHandler(log *log.Logger, repo *repo.Repository, report *service.ReportService, superUserID int64) *Handler {

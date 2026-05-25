@@ -95,7 +95,10 @@ func main() {
 	if err != nil {
 		l.Fatalf("polygon direct provider init failed: %v", err)
 	}
-	provider = tracker.NewMultiChainProvider(polyDirect)
+	provider = tracker.NewMultiChainProvider(
+		polyDirect,
+		tracker.NewBTCProvider(),
+	)
 	if err := provider.ValidateAll(ctx); err != nil {
 		startupHealthy = false
 		l.Printf("provider health-check failed (continuing in degraded mode): %v", err)
