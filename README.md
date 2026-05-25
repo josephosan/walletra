@@ -37,7 +37,7 @@ Telegram bot to track wallet transactions and generate hourly/daily/monthly/year
 
 ## Notes
 
-- In Docker runtime (including Railway), container startup runs all SQL files in `/app/migrations` before launching the bot.
+- In Docker runtime (including Railway), container startup applies SQL files in `/app/migrations` once and tracks them in `schema_migrations`.
 - In local `docker-compose`, Postgres also runs init SQL on first fresh volume via `docker-entrypoint-initdb.d`.
 - Supported chains: `btc-mainnet`, `eth-mainnet`, `matic-mainnet`, `solana-mainnet`, `ton-mainnet`.
 - On startup, bot validates provider health and exits if any supported chain provider is down.
