@@ -123,11 +123,12 @@ func main() {
 		}
 	}
 
-	trackerSvc.PollOnce(ctx)
+	go trackerSvc.PollOnce(ctx)
 
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 30
 	updates := telegramBot.GetUpdatesChan(u)
+	updateWorkers := make(chan struct{}, 32)
 
 	for {
 		select {
@@ -135,7 +136,11 @@ func main() {
 			log.Println("shutdown")
 			return
 		case update := <-updates:
-			handler.HandleUpdate(ctx, telegramBot, update)
+			updateWorkers <- struct{}{}
+			go func(upd tgbotapi.Update) {
+				defer func() { <-updateWorkers }()
+				handler.HandleUpdate(ctx, telegramBot, upd)
+			}(update)
 		}
 	}
 }
