@@ -96,7 +96,16 @@ func main() {
 	}
 	provider = tracker.NewMultiChainProvider(polyDirect)
 	if err := provider.ValidateAll(ctx); err != nil {
-		l.Fatalf("provider health-check failed: %v", err)
+		l.Printf("provider health-check failed (continuing in degraded mode): %v", err)
+		if cfg.SuperUserTelegram > 0 {
+			msg := tgbotapi.NewMessage(
+				cfg.SuperUserTelegram,
+				"⚠️ Provider health-check failed at startup.\n\nBot is running in degraded mode.\n\nError:\n"+err.Error(),
+			)
+			if _, sendErr := telegramBot.Send(msg); sendErr != nil {
+				l.Printf("failed to notify superuser about provider failure: %v", sendErr)
+			}
+		}
 	}
 	trackerSvc := service.NewTrackerService(r, provider, l)
 	handler := bot.NewHandler(l, r, reportSvc, cfg.SuperUserTelegram)
