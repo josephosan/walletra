@@ -79,20 +79,22 @@ func main() {
 	}
 	reportSvc := service.NewReportService(r)
 	var provider *tracker.MultiChainProvider
-	if cfg.PolygonDirectProviderEnabled {
-		polyDirect, err := tracker.NewPolygonDirectProvider(r, tracker.PolygonDirectConfig{
-			RPCURL:        cfg.PolygonRPCURL,
-			StartBlock:    cfg.PolygonStartBlock,
-			Confirmations: cfg.PolygonConfirmations,
-			ChunkSize:     cfg.PolygonScanChunkSize,
-		})
-		if err != nil {
-			l.Fatalf("polygon direct provider init failed: %v", err)
-		}
-		provider = tracker.NewMultiChainProvider(polyDirect)
-	} else {
-		l.Fatalf("POLYGON_DIRECT_PROVIDER_ENABLED must be true (explorer providers removed)")
+	if !cfg.PolygonDirectProviderEnabled {
+		l.Printf("POLYGON_DIRECT_PROVIDER_ENABLED is false; forcing direct provider mode because explorer providers were removed")
 	}
+	if cfg.PolygonRPCURL == "" {
+		l.Fatalf("POLYGON_RPC_URL is required for Polygon direct provider mode")
+	}
+	polyDirect, err := tracker.NewPolygonDirectProvider(r, tracker.PolygonDirectConfig{
+		RPCURL:        cfg.PolygonRPCURL,
+		StartBlock:    cfg.PolygonStartBlock,
+		Confirmations: cfg.PolygonConfirmations,
+		ChunkSize:     cfg.PolygonScanChunkSize,
+	})
+	if err != nil {
+		l.Fatalf("polygon direct provider init failed: %v", err)
+	}
+	provider = tracker.NewMultiChainProvider(polyDirect)
 	if err := provider.ValidateAll(ctx); err != nil {
 		l.Fatalf("provider health-check failed: %v", err)
 	}
