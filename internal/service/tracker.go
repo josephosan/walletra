@@ -37,11 +37,13 @@ func (s *TrackerService) PollOnce(ctx context.Context) {
 			// New wallets: bootstrap with one month of history.
 			since = now.AddDate(0, -1, 0)
 		}
+		s.log.Printf("poll wallet start wallet_id=%s name=%q chain=%s since=%s", w.ID, w.Name, w.Chain, since.Format(time.RFC3339))
 		filters, err := s.repo.GetWalletTokens(ctx, w.ID)
 		if err != nil {
 			s.log.Printf("tokens error wallet=%s err=%v", w.ID, err)
 			continue
 		}
+		s.log.Printf("poll wallet filters wallet_id=%s filters=%v", w.ID, filters)
 		txs, err := s.provider.FetchWalletTransactions(ctx, w, since, filters)
 		if err != nil {
 			s.log.Printf("provider error wallet=%s err=%v", w.ID, err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"math/big"
 	"strings"
 	"time"
@@ -78,7 +79,9 @@ func (p *PolygonDirectProvider) FetchWalletTransactions(ctx context.Context, wal
 		return nil, nil
 	}
 	safeTo := int64(latest) - p.confirmations
+	log.Printf("[polygon-direct] wallet=%s start=%d safe_to=%d latest=%d confirmations=%d since=%s", wallet.Address, start, safeTo, latest, p.confirmations, since.Format(time.RFC3339))
 	if start > safeTo {
+		log.Printf("[polygon-direct] wallet=%s nothing to scan start=%d > safe_to=%d", wallet.Address, start, safeTo)
 		return nil, nil
 	}
 
@@ -106,10 +109,12 @@ func (p *PolygonDirectProvider) FetchWalletTransactions(ctx context.Context, wal
 		if to > safeTo {
 			to = safeTo
 		}
+		log.Printf("[polygon-direct] wallet=%s scanning range=%d-%d", wallet.Address, current, to)
 		chunkTxs, lastHash, err := p.scanRange(ctx, wallet, walletAddr, since, current, to, filterContracts, filterSymbols)
 		if err != nil {
 			return nil, err
 		}
+		log.Printf("[polygon-direct] wallet=%s range=%d-%d fetched=%d last_hash=%s", wallet.Address, current, to, len(chunkTxs), lastHash)
 		out = append(out, chunkTxs...)
 		if err := p.repo.UpsertPolygonIndexerState(ctx, wallet.Chain, to, lastHash); err != nil {
 			return nil, fmt.Errorf("save polygon indexer state: %w", err)
@@ -117,6 +122,7 @@ func (p *PolygonDirectProvider) FetchWalletTransactions(ctx context.Context, wal
 		current = to + 1
 	}
 
+	log.Printf("[polygon-direct] wallet=%s total_fetched=%d", wallet.Address, len(out))
 	return out, nil
 }
 
@@ -220,6 +226,7 @@ func (p *PolygonDirectProvider) scanRange(
 			out = append(out, models.WalletTransaction{WalletID: wallet.ID, TxHash: tx.Hash().Hex(), Chain: wallet.Chain, TokenSymbol: "MATIC", Direction: direction, Amount: amount, Timestamp: bt, RawPayload: repo.EncodePayload(raw)})
 		}
 	}
+	log.Printf("[polygon-direct] wallet=%s range=%d-%d native_transfers=%d", wallet.Address, from, to, len(out))
 
 	// ERC20 transfers via logs for the same block range.
 	inLogs, err := p.getTransferLogs(ctx, walletAddr, true, from, to)
@@ -230,6 +237,7 @@ func (p *PolygonDirectProvider) scanRange(
 	if err != nil {
 		return nil, "", err
 	}
+	log.Printf("[polygon-direct] wallet=%s range=%d-%d erc20_logs_in=%d erc20_logs_out=%d", wallet.Address, from, to, len(inLogs), len(outLogs))
 
 	out = append(out, p.normalizeLogs(ctx, wallet, inLogs, "transfer_in", since, filterContracts, filterSymbols)...)
 	out = append(out, p.normalizeLogs(ctx, wallet, outLogs, "transfer_out", since, filterContracts, filterSymbols)...)
