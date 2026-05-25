@@ -152,16 +152,23 @@ func (p *PolygonDirectProvider) fetchLatestTen(
 	filterSymbols map[string]bool,
 ) ([]models.WalletTransaction, error) {
 	const target = 10
+	const maxBootstrapRanges = 8
 	out := make([]models.WalletTransaction, 0, target)
 	seen := map[string]bool{}
 	lowerBound := p.startBlock
 	currentTo := safeTo
+	rangesScanned := 0
 
 	for currentTo >= lowerBound && len(out) < target {
+		if rangesScanned >= maxBootstrapRanges {
+			log.Printf("[polygon-direct] wallet=%s bootstrap capped at %d ranges with %d txs", wallet.Address, maxBootstrapRanges, len(out))
+			break
+		}
 		from := currentTo - p.chunkSize + 1
 		if from < lowerBound {
 			from = lowerBound
 		}
+		rangesScanned++
 		chunk, _, err := p.scanRange(ctx, wallet, walletAddr, time.Unix(0, 0).UTC(), from, currentTo, filterContracts, filterSymbols)
 		if err != nil {
 			return nil, err

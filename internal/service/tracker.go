@@ -44,7 +44,9 @@ func (s *TrackerService) PollOnce(ctx context.Context) {
 			continue
 		}
 		s.log.Printf("poll wallet filters wallet_id=%s filters=%v", w.ID, filters)
-		txs, err := s.provider.FetchWalletTransactions(ctx, w, since, filters)
+		walletCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
+		txs, err := s.provider.FetchWalletTransactions(walletCtx, w, since, filters)
+		cancel()
 		if err != nil {
 			s.log.Printf("provider error wallet=%s err=%v", w.ID, err)
 			continue
